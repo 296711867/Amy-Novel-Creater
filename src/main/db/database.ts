@@ -9,6 +9,8 @@ import { createContinuityRepository } from "./repositories/continuity";
 import { createGenerationRepository } from "./repositories/generation";
 import { createUsageRepository } from "./repositories/usage";
 import { createModelProfilesRepository } from "./repositories/model-profiles";
+import { createNamePoolRepository } from "./repositories/name-pools";
+import type { NamePool } from "@domain/name-pool";
 
 /**
  * Thin facade over the domain repositories. Public API signatures must stay
@@ -23,6 +25,7 @@ export class NovelDatabase {
   private readonly generation;
   private readonly usage;
   private readonly profiles;
+  private readonly namePools;
 
   private constructor(private readonly client: Client) {
     this.novels = createNovelsRepository(client);
@@ -33,6 +36,7 @@ export class NovelDatabase {
     this.generation = createGenerationRepository(client, this.chapters);
     this.usage = createUsageRepository(client);
     this.profiles = createModelProfilesRepository(client);
+    this.namePools = createNamePoolRepository(client);
   }
 
   static async open(path: string): Promise<NovelDatabase> {
@@ -43,6 +47,13 @@ export class NovelDatabase {
 
   close(): void {
     this.client.close();
+  }
+
+  getNamePool(novelId: string, genre: string): Promise<NamePool> {
+    return this.namePools.getNamePool(novelId, genre);
+  }
+  saveNamePool(pool: NamePool): Promise<NamePool> {
+    return this.namePools.saveNamePool(pool);
   }
 
   listNovels() {

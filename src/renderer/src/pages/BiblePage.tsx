@@ -15,6 +15,8 @@ import {
 import { Navigate, NavLink, useParams } from "react-router-dom";
 import {
   BIBLE_SECTION_LABELS,
+  CHARACTER_TIER_LABELS,
+  characterTierOf,
   ENTITY_TYPE_LABELS,
   type BibleSectionKind,
   type SaveStoryEntityInput,
@@ -262,7 +264,14 @@ export function BiblePage(): React.JSX.Element {
                 >
                   <span>{entity.name.slice(0, 1)}</span>
                   <div>
-                    <b>{entity.name}</b>
+                    <b>
+                      {entity.name}
+                      {characterTierOf(entity) && (
+                        <em className="tier-badge">
+                          {CHARACTER_TIER_LABELS[characterTierOf(entity)!]}
+                        </em>
+                      )}
+                    </b>
                     <small>{entity.summary || "暂无简介"}</small>
                   </div>
                 </button>

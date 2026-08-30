@@ -8,6 +8,8 @@ import type { Chapter, Novel } from "./novel";
 import type { StoryScene, StoryVolume } from "./story-structure";
 import { getTemplate, renderTemplate } from "./prompt-templates";
 import type { PromptTemplateOverrides } from "./prompt-templates";
+import { characterTierOf, isCharacterRelevant, mentions } from "./story-bible";
+import { sceneCardText } from "./scene-card";
 
 export type ContextSourceKind =
   | "instruction"
@@ -53,6 +55,8 @@ export interface ContextPackInput {
   inputBudget: number;
   outputTokensReserved: number;
   promptOverrides?: PromptTemplateOverrides;
+  /** 名称库提示（题材风格+示例名），约束模型给新人物起名的风格。 */
+  namePoolHint?: string;
 }
 
 export function estimateTokens(text: string): number {
@@ -129,14 +133,64 @@ export function buildContextPack(input: ContextPackInput): ContextPack {
       required: item.kind === "style" || item.kind === "boundaries",
       text: item.content,
     })),
-    ...input.entities.map((item) => ({
-      id: item.id,
-      kind: "entity" as const,
-      label: `资料 · ${item.name}`,
-      priority: 72,
-      required: false,
-      text: entityText(item),
-    })),
+    ...(() => {
+      // 人物按 tier 过滤：主角/核心配角常驻；酱油仅章纲提及；龙套不进上下文。
+      // 场景卡（location 且有功能字段）仅章纲/章题提及才注入，锚点保证一致性。
+      const chapterText = `${input.chapter.title}\n${input.chapter.outline}\n${input.scenes.map((s) => `${s.title}${s.summary}${s.location}`).join("\n")}`;
+      const characterSources = input.entities
+        .filter((item) => item.type === "character")
+        .filter((item) => isCharacterRelevant(item, chapterText))
+        .map((item) => ({
+          id: item.id,
+          kind: "entity" as const,
+          label: `资料 · ${item.name}`,
+          priority: characterTierOf(item) === "protagonist" ? 76 : 72,
+          required: false,
+          text: entityText(item),
+        }));
+      const sceneSources = input.entities
+        .filter((item) => item.type === "location")
+        .map((item) => ({ entity: item, card: sceneCardText(item) }))
+        .filter(
+          (item) =>
+            item.card !== null && mentions(chapterText, item.entity) === true,
+        )
+        .map((item) => ({
+          id: `${item.entity.id}:scene`,
+          kind: "entity" as const,
+          label: `场景 · ${item.entity.name}`,
+          priority: 88,
+          required: false,
+          text: `${item.entity.name}${item.entity.aliases.length ? `（别名：${item.entity.aliases.join("、")}）` : ""}\n${item.card}`,
+        }));
+      const otherSources = input.entities
+        .filter(
+          (item) =>
+            item.type !== "character" &&
+            (item.type !== "location" || sceneCardText(item) === null),
+        )
+        .map((item) => ({
+          id: item.id,
+          kind: "entity" as const,
+          label: `资料 · ${item.name}`,
+          priority: 72,
+          required: false,
+          text: entityText(item),
+        }));
+      return [...sceneSources, ...characterSources, ...otherSources];
+    })(),
+    ...(input.namePoolHint
+      ? [
+          {
+            id: "name-pool",
+            kind: "entity" as const,
+            label: "名称库",
+            priority: 70,
+            required: false,
+            text: input.namePoolHint,
+          },
+        ]
+      : []),
     ...input.foreshadow
       .filter(
         (item) => item.status !== "resolved" && item.status !== "abandoned",

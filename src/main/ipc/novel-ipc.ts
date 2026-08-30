@@ -30,6 +30,7 @@ import type { NovelDatabase } from "../db/database";
 import type {
   SaveBibleSectionInput,
   SaveStoryEntityInput,
+  StoryEntity,
   StoryEntityType,
 } from "@domain/story-bible";
 import type {
@@ -40,12 +41,17 @@ import type {
 import { parseNovelProject } from "@domain/project-export";
 import {
   biblePlanningPrompt,
+  castPlanningPrompt,
   parseBiblePlan,
+  parseCastPlan,
+  parseScenePlan,
   parseStructurePlan,
+  scenePlanningPrompt,
   structurePlanningPrompt,
   type NovelPlanSummary,
   type PlanPhase,
 } from "@domain/planning";
+import { namePoolText } from "@domain/name-pool";
 
 export function registerNovelIpc(
   ipc: IpcMain,
@@ -84,16 +90,31 @@ export function registerNovelIpc(
       if (!profile) throw new Error("请先在设置页配置默认写作模型");
       const apiKey = await secrets.get(profile.id);
       const bible = await database.listBibleSections(novelId);
+      const entities = await database.listStoryEntities(novelId);
+      const namePool = await database.getNamePool(novelId, novel.genre);
       const prompt =
         phase === "bible"
           ? biblePlanningPrompt(novel)
-          : structurePlanningPrompt(novel, bible);
+          : phase === "structure"
+            ? structurePlanningPrompt(novel, bible)
+            : phase === "cast"
+              ? castPlanningPrompt(
+                  novel,
+                  bible,
+                  entities.filter((item) => item.type === "character"),
+                  namePoolText(namePool),
+                )
+              : scenePlanningPrompt(
+                  novel,
+                  bible,
+                  entities.filter((item) => item.type === "location"),
+                );
       // 规划是结构化输出任务，关闭思考以获得稳定 JSON 并节省 token。
       const result = await streamOpenAICompatible(
         profile,
         apiKey,
         prompt,
-        phase === "bible" ? 8000 : 24000,
+        phase === "bible" ? 8000 : phase === "structure" ? 24000 : 12000,
         0.7,
         () => {},
         fetch,
@@ -136,6 +157,81 @@ export function registerNovelIpc(
           entities: plan.characters.length + plan.entities.length,
           volumes: 0,
           chapters: 0,
+          extras: 0,
+        };
+        return summary;
+      }
+      if (phase === "cast") {
+        const plan = parseCastPlan(result.content),
+          byName = new Map<string, StoryEntity>(
+            entities
+              .filter((item) => item.type === "character")
+              .map((item) => [item.name, item] as const),
+          );
+        for (const character of plan.characters) {
+          const existing = byName.get(character.name);
+          await database.saveStoryEntity({
+            id: existing?.id,
+            novelId,
+            type: "character",
+            name: character.name,
+            summary: character.summary,
+            aliases: character.aliases,
+            profile: {
+              ...(existing?.profile ?? {}),
+              ...character.profile,
+              tier: character.tier,
+            },
+          });
+        }
+        // 龙套名字并入名称库 usedNames，供后续章节起名查重与风格参照。
+        namePool.usedNames = [
+          ...new Set([...namePool.usedNames, ...plan.extras]),
+        ];
+        await database.saveNamePool(namePool);
+        const summary: NovelPlanSummary = {
+          phase,
+          sections: 0,
+          entities: plan.characters.length,
+          volumes: 0,
+          chapters: 0,
+          extras: plan.extras.length,
+        };
+        return summary;
+      }
+      if (phase === "scenes") {
+        const plan = parseScenePlan(result.content),
+          byName = new Map<string, StoryEntity>(
+            entities
+              .filter((item) => item.type === "location")
+              .map((item) => [item.name, item] as const),
+          );
+        for (const scene of plan.scenes) {
+          const existing = byName.get(scene.name);
+          await database.saveStoryEntity({
+            id: existing?.id,
+            novelId,
+            type: "location",
+            name: scene.name,
+            summary: scene.summary,
+            aliases: scene.aliases,
+            profile: {
+              ...(existing?.profile ?? {}),
+              purpose: scene.purpose,
+              mood: scene.mood,
+              visualAnchors: scene.visualAnchors.join("、"),
+              residents: scene.residents,
+              dangerLevel: scene.dangerLevel,
+            },
+          });
+        }
+        const summary: NovelPlanSummary = {
+          phase,
+          sections: 0,
+          entities: plan.scenes.length,
+          volumes: 0,
+          chapters: 0,
+          extras: 0,
         };
         return summary;
       }
@@ -210,6 +306,7 @@ export function registerNovelIpc(
         entities: 0,
         volumes: plan.volumes.length,
         chapters: plan.chapters.length,
+        extras: 0,
       };
       return summary;
     },

@@ -30,6 +30,7 @@ const MIGRATIONS: string[] = [
   `CREATE INDEX IF NOT EXISTS generation_jobs_queue ON generation_jobs(batch_id,status,position)`,
   `CREATE TABLE IF NOT EXISTS continuity_findings (id TEXT PRIMARY KEY, candidate_id TEXT NOT NULL, chapter_id TEXT NOT NULL, severity TEXT NOT NULL, category TEXT NOT NULL, message TEXT NOT NULL, evidence TEXT NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
   `CREATE TABLE IF NOT EXISTS fact_proposals (id TEXT PRIMARY KEY, candidate_id TEXT NOT NULL, chapter_id TEXT NOT NULL, kind TEXT NOT NULL, title TEXT NOT NULL, payload_json TEXT NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
+  `CREATE TABLE IF NOT EXISTS name_pools (novel_id TEXT PRIMARY KEY, genre TEXT NOT NULL, surnames_json TEXT NOT NULL, given_names_json TEXT NOT NULL, used_names_json TEXT NOT NULL, updated_at TEXT NOT NULL)`,
 ];
 
 export async function runMigrations(client: Client): Promise<void> {

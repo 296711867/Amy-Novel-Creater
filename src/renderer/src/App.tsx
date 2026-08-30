@@ -9,6 +9,8 @@ import {
   Home,
   Layers,
   Library,
+  Map,
+  Users,
   Pause,
   Play,
   Plus,
@@ -29,6 +31,7 @@ import {
   validateChapterRange,
   type GenerationPolicy,
 } from "@domain/generation";
+import type { PlanPhase } from "@domain/planning";
 import { useNovelStore } from "./store/novel-store";
 import { WriterPage } from "./pages/WriterPage";
 import { BiblePage } from "./pages/BiblePage";
@@ -303,7 +306,7 @@ function NovelPlanPage(): React.JSX.Element {
   const chaptersByNovel = useNovelStore((s) => s.chapters);
   const loadChapters = useNovelStore((s) => s.loadChapters);
   const generateNovelPlan = useNovelStore((s) => s.generateNovelPlan);
-  const [planBusy, setPlanBusy] = useState<"bible" | "structure" | null>(null),
+  const [planBusy, setPlanBusy] = useState<PlanPhase | null>(null),
     [planMessage, setPlanMessage] = useState("");
   const novel = novels.find((n) => n.id === novelId);
   const chapters = chaptersByNovel[novelId] ?? [];
@@ -311,7 +314,7 @@ function NovelPlanPage(): React.JSX.Element {
     void loadChapters(novelId);
   }, [loadChapters, novelId]);
   if (!novel) return <Navigate to="/novels" replace />;
-  async function runPlan(phase: "bible" | "structure") {
+  async function runPlan(phase: PlanPhase) {
     setPlanBusy(phase);
     setPlanMessage("");
     try {
@@ -319,7 +322,11 @@ function NovelPlanPage(): React.JSX.Element {
       setPlanMessage(
         phase === "bible"
           ? `已生成故事圣经 ${summary.sections} 节、设定卡 ${summary.entities} 张，请打开故事圣经审核修改。`
-          : `已生成 ${summary.volumes} 卷、${summary.chapters} 章目录，请到卷章结构审核修改。`,
+          : phase === "cast"
+            ? `已生成人物 ${summary.entities} 名（含分层），龙套名称 ${summary.extras} 个并入名称库，请到故事圣经·故事实体审核。`
+            : phase === "scenes"
+              ? `已生成场景卡 ${summary.entities} 张（含视觉锚点），请到故事圣经·故事实体的地点类审核。`
+              : `已生成 ${summary.volumes} 卷、${summary.chapters} 章目录，请到卷章结构审核修改。`,
       );
     } catch (error) {
       setPlanMessage(
@@ -387,6 +394,22 @@ function NovelPlanPage(): React.JSX.Element {
             >
               <Sparkles size={16} />
               {planBusy === "bible" ? "正在生成圣经…" : "AI 生成故事圣经与角色"}
+            </button>
+            <button
+              className="secondary"
+              disabled={planBusy !== null}
+              onClick={() => void runPlan("cast")}
+            >
+              <Users size={16} />
+              {planBusy === "cast" ? "正在设计人物…" : "AI 人物分层与名称库"}
+            </button>
+            <button
+              className="secondary"
+              disabled={planBusy !== null}
+              onClick={() => void runPlan("scenes")}
+            >
+              <Map size={16} />
+              {planBusy === "scenes" ? "正在设计场景…" : "AI 场景库（可复用）"}
             </button>
             <button
               className="secondary"

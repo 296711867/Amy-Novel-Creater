@@ -14,6 +14,7 @@ import {
   chapterReviewPrompt,
   parseChapterReview,
 } from "@domain/chapter-review";
+import { namePoolText } from "@domain/name-pool";
 
 const MAX_CONCURRENCY = 3;
 type StreamResult = Awaited<ReturnType<typeof streamOpenAICompatible>>;
@@ -182,6 +183,10 @@ export class BatchRunner {
         this.database.listCharacterStates(current.novelId),
       ]);
       if (!novel || !chapter) throw new Error("作品或章节不存在");
+      const pool = await this.database.getNamePool(
+        current.novelId,
+        novel.genre,
+      );
       const output = Math.min(
         Math.ceil(current.policy.chapterWords * 1.5),
         profile.contextWindow - 4000,
@@ -215,6 +220,7 @@ export class BatchRunner {
           .slice(-2),
         inputBudget: Math.max(4000, profile.contextWindow - output),
         outputTokensReserved: output,
+        namePoolHint: pool.usedNames.length ? namePoolText(pool) : undefined,
       });
       await this.database.saveContextSnapshot(current.novelId, pack);
       await this.database.updateGenerationJob(job.id, "generating");

@@ -30,10 +30,19 @@ import type { FactProposal, StoredFinding } from "@domain/quality-check";
 import { estimateTokens } from "@domain/context-pack";
 import {
   biblePlanningPrompt,
+  castPlanningPrompt,
   parseBiblePlan,
+  parseCastPlan,
+  parseScenePlan,
   parseStructurePlan,
+  scenePlanningPrompt,
   structurePlanningPrompt,
 } from "@domain/planning";
+import {
+  defaultNamePool,
+  namePoolText,
+  type NamePool,
+} from "@domain/name-pool";
 import type { PlanPhase } from "@domain/planning";
 import {
   estimateGeneration,
@@ -295,10 +304,26 @@ export const webPlatform: PlatformPort = {
     if (!profile) throw new Error("请先在设置页配置默认写作模型");
     const key = sessionStorage.getItem(`amy-novel:secret:${profile.id}`) ?? "";
     const bible = await this.listBibleSections(novelId);
+    const entities = await this.listStoryEntities(novelId);
+    const poolKey = `amy-novel:name-pool:${novelId}`,
+      namePool = read<NamePool>(poolKey, defaultNamePool(novelId, novel.genre));
     const prompt =
       phase === "bible"
         ? biblePlanningPrompt(novel)
-        : structurePlanningPrompt(novel, bible);
+        : phase === "structure"
+          ? structurePlanningPrompt(novel, bible)
+          : phase === "cast"
+            ? castPlanningPrompt(
+                novel,
+                bible,
+                entities.filter((item) => item.type === "character"),
+                namePoolText(namePool),
+              )
+            : scenePlanningPrompt(
+                novel,
+                bible,
+                entities.filter((item) => item.type === "location"),
+              );
     // 浏览器直连模型受 CORS 限制，多数 provider 需要代理才能使用。
     const response = await fetch(
       `${profile.baseUrl.replace(/\/$/, "")}/chat/completions`,
@@ -311,7 +336,8 @@ export const webPlatform: PlatformPort = {
         body: JSON.stringify({
           model: profile.modelId,
           messages: [{ role: "user", content: prompt }],
-          max_tokens: phase === "bible" ? 8000 : 24000,
+          max_tokens:
+            phase === "bible" ? 8000 : phase === "structure" ? 24000 : 12000,
           temperature: 0.7,
           thinking: { type: "disabled" },
         }),
@@ -346,6 +372,78 @@ export const webPlatform: PlatformPort = {
         entities: plan.characters.length + plan.entities.length,
         volumes: 0,
         chapters: 0,
+        extras: 0,
+      };
+    }
+    if (phase === "cast") {
+      const plan = parseCastPlan(content),
+        byName = new Map(
+          entities
+            .filter((item) => item.type === "character")
+            .map((item) => [item.name, item]),
+        );
+      for (const character of plan.characters) {
+        const existing = byName.get(character.name);
+        await this.saveStoryEntity({
+          id: existing?.id,
+          novelId,
+          type: "character",
+          name: character.name,
+          summary: character.summary,
+          aliases: character.aliases,
+          profile: {
+            ...(existing?.profile ?? {}),
+            ...character.profile,
+            tier: character.tier,
+          },
+        });
+      }
+      write(poolKey, {
+        ...namePool,
+        usedNames: [...new Set([...namePool.usedNames, ...plan.extras])],
+      });
+      return {
+        phase,
+        sections: 0,
+        entities: plan.characters.length,
+        volumes: 0,
+        chapters: 0,
+        extras: plan.extras.length,
+      };
+    }
+    if (phase === "scenes") {
+      const plan = parseScenePlan(content),
+        byName = new Map(
+          entities
+            .filter((item) => item.type === "location")
+            .map((item) => [item.name, item]),
+        );
+      for (const scene of plan.scenes) {
+        const existing = byName.get(scene.name);
+        await this.saveStoryEntity({
+          id: existing?.id,
+          novelId,
+          type: "location",
+          name: scene.name,
+          summary: scene.summary,
+          aliases: scene.aliases,
+          profile: {
+            ...(existing?.profile ?? {}),
+            purpose: scene.purpose,
+            mood: scene.mood,
+            visualAnchors: scene.visualAnchors.join("、"),
+            residents: scene.residents,
+            dangerLevel: scene.dangerLevel,
+          },
+        });
+      }
+      return {
+        phase,
+        sections: 0,
+        entities: plan.scenes.length,
+        volumes: 0,
+        chapters: 0,
+        extras: 0,
       };
     }
     const plan = parseStructurePlan(content),
@@ -398,6 +496,7 @@ export const webPlatform: PlatformPort = {
       entities: 0,
       volumes: plan.volumes.length,
       chapters: plan.chapters.length,
+      extras: 0,
     };
   },
   async listChapters(novelId: string) {

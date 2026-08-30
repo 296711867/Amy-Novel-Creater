@@ -3,7 +3,9 @@ export type PromptTemplateKey =
   | "fact_extraction"
   | "chapter_review"
   | "bible_planning"
-  | "structure_planning";
+  | "structure_planning"
+  | "cast_planning"
+  | "scene_planning";
 export interface PromptTemplate {
   key: PromptTemplateKey;
   name: string;
@@ -49,6 +51,20 @@ export const PROMPT_TEMPLATES: Record<PromptTemplateKey, PromptTemplate> = {
     description: "基于故事圣经生成卷级阶段目标与逐章标题大纲。",
     template:
       '你是长篇网文结构策划。基于以下信息规划分卷与章节目录。\n书名：{{title}}（{{genre}}）\n核心设定：{{premise}}\n规划篇幅：{{targetChapters}} 章，单章 {{chapterWords}} 字。\n故事圣经：\n{{bible}}\n要求：每卷有明确的阶段目标与转折点；章节大纲两到四句，写清该章事件、钩子与推进；节奏遵循网文断章钩子习惯；总章数不超过 {{targetChapters}}。\n返回严格 JSON：{"volumes":[{"title":"卷名","outline":"卷级目标与转折"}],"chapters":[{"volumeTitle":"所属卷名","title":"第X章 章节名","outline":"本章大纲"}]}。chapters 按顺序完整覆盖全部卷。',
+  },
+  cast_planning: {
+    key: "cast_planning",
+    name: "人物分层规划",
+    description: "把人物划分为主角/核心配角/酱油/龙套四级并补充名称库。",
+    template:
+      '你是长篇网文角色策划。基于故事圣经为本书设计完整人物体系。\n书名：{{title}}（{{genre}}）\n故事圣经：\n{{bible}}\n既有角色（保持名字不变，可补充设定）：\n{{characters}}\n名称库（新角色起名须参照此风格，禁止重名）：\n{{namePool}}\n分层规则：protagonist 主角 1 名（完整卡含语言习惯与成长弧线）；support 核心配角 3-6 名（对手/伙伴/导师）；recurring 酱油人物 6-15 名（一行定位+出现条件+与主角关系，会在多章反复出现）；extra 跑龙套仅给名字（不出卡片）。\n返回严格 JSON：{"characters":[{"name":"姓名","summary":"一句话定位","aliases":[],"tier":"protagonist|support|recurring","profile":{"身份":"","性格":"","目标":"","秘密":"","语言习惯":"","成长弧线":"","出现条件":""}}],"extras":["龙套姓名","…"]}。recurring 的 profile 只需 出现条件 一项必填。',
+  },
+  scene_planning: {
+    key: "scene_planning",
+    name: "场景库规划",
+    description: "生成可复用的功能场景卡（含视觉锚点，保证重复场景一致）。",
+    template:
+      '你是长篇网文场景设计师。基于故事圣经设计本书的场景库。\n书名：{{title}}（{{genre}}）\n故事圣经：\n{{bible}}\n既有地点（沿用名字，补充场景卡字段）：\n{{locations}}\n要求：场景覆盖 主基地、系统/规则空间、常去现实场景、以及前中期需要的副本世界各若干；每个场景给 3-5 个视觉锚点（固定细节，重复出现时必须保留）。\n返回严格 JSON：{"scenes":[{"name":"场景名","aliases":[],"summary":"一句话说明","purpose":"叙事功能","mood":"感官氛围","visualAnchors":["锚点1","锚点2"],"residents":"常驻人物","dangerLevel":"低|中|高"}]}。共 8-20 个场景。',
   },
 };
 export interface RenderedPrompt {
