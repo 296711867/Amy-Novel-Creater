@@ -1,0 +1,170 @@
+import { contextBridge, ipcRenderer } from "electron";
+import type {
+  CreateChapterInput,
+  CreateNovelInput,
+  SaveChapterInput,
+  UpdateChapterPlanInput,
+} from "@domain/novel";
+import type { SaveSceneInput, SaveVolumeInput } from "@domain/story-structure";
+import type { ContextPack } from "@domain/context-pack";
+import type { SaveUsageInput } from "@domain/usage";
+import type { SaveModelProfileInput } from "@domain/model-profile";
+import type {
+  GenerateChapterInput,
+  GenerationProgress,
+} from "@domain/chapter-generation";
+import type { FactProposal, StoredFinding } from "@domain/quality-check";
+import type {
+  GenerationBatch,
+  GenerationJob,
+  GenerationJobStatus,
+  GenerationPolicy,
+} from "@domain/generation";
+import { IPC_CHANNELS, type AmyNovelApi } from "@shared/ipc-contract";
+import type {
+  SaveBibleSectionInput,
+  SaveStoryEntityInput,
+  StoryEntityType,
+} from "@domain/story-bible";
+import type {
+  SaveCharacterStateInput,
+  SaveForeshadowInput,
+  SaveTimelineEventInput,
+} from "@domain/continuity";
+import type { NovelProjectBundle } from "@domain/project-export";
+
+const api: AmyNovelApi = {
+  host: "electron",
+  getDiagnostics: () => ipcRenderer.invoke(IPC_CHANNELS.getDiagnostics),
+  importNovelProject: (bundle: NovelProjectBundle) =>
+    ipcRenderer.invoke(IPC_CHANNELS.importNovelProject, bundle),
+  listNovels: () => ipcRenderer.invoke(IPC_CHANNELS.listNovels),
+  createNovel: (input: CreateNovelInput) =>
+    ipcRenderer.invoke(IPC_CHANNELS.createNovel, input),
+  listChapters: (novelId: string) =>
+    ipcRenderer.invoke(IPC_CHANNELS.listChapters, novelId),
+  getChapter: (chapterId: string) =>
+    ipcRenderer.invoke(IPC_CHANNELS.getChapter, chapterId),
+  saveChapter: (input: SaveChapterInput) =>
+    ipcRenderer.invoke(IPC_CHANNELS.saveChapter, input),
+  createChapter: (input: CreateChapterInput) =>
+    ipcRenderer.invoke(IPC_CHANNELS.createChapter, input),
+  updateChapterPlan: (input: UpdateChapterPlanInput) =>
+    ipcRenderer.invoke(IPC_CHANNELS.updateChapterPlan, input),
+  deleteChapter: (id: string) =>
+    ipcRenderer.invoke(IPC_CHANNELS.deleteChapter, id),
+  reorderChapters: (novelId: string, ids: string[]) =>
+    ipcRenderer.invoke(IPC_CHANNELS.reorderChapters, novelId, ids),
+  listStoryStructure: (novelId: string) =>
+    ipcRenderer.invoke(IPC_CHANNELS.listStoryStructure, novelId),
+  saveVolume: (input: SaveVolumeInput) =>
+    ipcRenderer.invoke(IPC_CHANNELS.saveVolume, input),
+  deleteVolume: (id: string) =>
+    ipcRenderer.invoke(IPC_CHANNELS.deleteVolume, id),
+  reorderVolumes: (novelId: string, ids: string[]) =>
+    ipcRenderer.invoke(IPC_CHANNELS.reorderVolumes, novelId, ids),
+  saveScene: (input: SaveSceneInput) =>
+    ipcRenderer.invoke(IPC_CHANNELS.saveScene, input),
+  deleteScene: (id: string) => ipcRenderer.invoke(IPC_CHANNELS.deleteScene, id),
+  reorderScenes: (chapterId: string, ids: string[]) =>
+    ipcRenderer.invoke(IPC_CHANNELS.reorderScenes, chapterId, ids),
+  saveContextSnapshot: (novelId: string, pack: ContextPack) =>
+    ipcRenderer.invoke(IPC_CHANNELS.saveContextSnapshot, novelId, pack),
+  listContextSnapshots: (novelId: string, chapterId?: string) =>
+    ipcRenderer.invoke(IPC_CHANNELS.listContextSnapshots, novelId, chapterId),
+  saveUsage: (input: SaveUsageInput) =>
+    ipcRenderer.invoke(IPC_CHANNELS.saveUsage, input),
+  listUsage: (novelId?: string) =>
+    ipcRenderer.invoke(IPC_CHANNELS.listUsage, novelId),
+  listModelProfiles: () => ipcRenderer.invoke(IPC_CHANNELS.listModelProfiles),
+  saveModelProfile: (input: SaveModelProfileInput) =>
+    ipcRenderer.invoke(IPC_CHANNELS.saveModelProfile, input),
+  deleteModelProfile: (id: string) =>
+    ipcRenderer.invoke(IPC_CHANNELS.deleteModelProfile, id),
+  testModelConnection: (id: string, key?: string) =>
+    ipcRenderer.invoke(IPC_CHANNELS.testModelConnection, id, key),
+  generateChapter: (
+    input: GenerateChapterInput,
+    onProgress: (event: GenerationProgress) => void,
+  ) => {
+    const listener = (
+      _event: Electron.IpcRendererEvent,
+      data: GenerationProgress,
+    ) => {
+      if (data.requestId === input.requestId) onProgress(data);
+    };
+    ipcRenderer.on(IPC_CHANNELS.generationProgress, listener);
+    return ipcRenderer
+      .invoke(IPC_CHANNELS.generateChapter, input)
+      .finally(() =>
+        ipcRenderer.removeListener(IPC_CHANNELS.generationProgress, listener),
+      );
+  },
+  cancelGeneration: (requestId: string) =>
+    ipcRenderer.invoke(IPC_CHANNELS.cancelGeneration, requestId),
+  listChapterCandidates: (chapterId: string) =>
+    ipcRenderer.invoke(IPC_CHANNELS.listChapterCandidates, chapterId),
+  acceptChapterCandidate: (id: string) =>
+    ipcRenderer.invoke(IPC_CHANNELS.acceptChapterCandidate, id),
+  rejectChapterCandidate: (id: string) =>
+    ipcRenderer.invoke(IPC_CHANNELS.rejectChapterCandidate, id),
+  listFindings: (id: string) =>
+    ipcRenderer.invoke(IPC_CHANNELS.listFindings, id),
+  updateFinding: (id: string, status: StoredFinding["status"]) =>
+    ipcRenderer.invoke(IPC_CHANNELS.updateFinding, id, status),
+  listFactProposals: (id: string) =>
+    ipcRenderer.invoke(IPC_CHANNELS.listFactProposals, id),
+  updateFactProposal: (id: string, status: FactProposal["status"]) =>
+    ipcRenderer.invoke(IPC_CHANNELS.updateFactProposal, id, status),
+  listChapterVersions: (chapterId: string) =>
+    ipcRenderer.invoke(IPC_CHANNELS.listChapterVersions, chapterId),
+  createChapterSnapshot: (chapterId: string) =>
+    ipcRenderer.invoke(IPC_CHANNELS.createChapterSnapshot, chapterId),
+  listBibleSections: (novelId: string) =>
+    ipcRenderer.invoke(IPC_CHANNELS.listBibleSections, novelId),
+  saveBibleSection: (input: SaveBibleSectionInput) =>
+    ipcRenderer.invoke(IPC_CHANNELS.saveBibleSection, input),
+  listStoryEntities: (novelId: string, type?: StoryEntityType) =>
+    ipcRenderer.invoke(IPC_CHANNELS.listStoryEntities, novelId, type),
+  saveStoryEntity: (input: SaveStoryEntityInput) =>
+    ipcRenderer.invoke(IPC_CHANNELS.saveStoryEntity, input),
+  deleteStoryEntity: (entityId: string) =>
+    ipcRenderer.invoke(IPC_CHANNELS.deleteStoryEntity, entityId),
+  listTimelineEvents: (novelId: string) =>
+    ipcRenderer.invoke(IPC_CHANNELS.listTimelineEvents, novelId),
+  saveTimelineEvent: (input: SaveTimelineEventInput) =>
+    ipcRenderer.invoke(IPC_CHANNELS.saveTimelineEvent, input),
+  deleteTimelineEvent: (id: string) =>
+    ipcRenderer.invoke(IPC_CHANNELS.deleteTimelineEvent, id),
+  listForeshadowThreads: (novelId: string) =>
+    ipcRenderer.invoke(IPC_CHANNELS.listForeshadowThreads, novelId),
+  saveForeshadowThread: (input: SaveForeshadowInput) =>
+    ipcRenderer.invoke(IPC_CHANNELS.saveForeshadowThread, input),
+  deleteForeshadowThread: (id: string) =>
+    ipcRenderer.invoke(IPC_CHANNELS.deleteForeshadowThread, id),
+  listCharacterStates: (novelId: string, characterId?: string) =>
+    ipcRenderer.invoke(IPC_CHANNELS.listCharacterStates, novelId, characterId),
+  saveCharacterState: (input: SaveCharacterStateInput) =>
+    ipcRenderer.invoke(IPC_CHANNELS.saveCharacterState, input),
+  deleteCharacterState: (id: string) =>
+    ipcRenderer.invoke(IPC_CHANNELS.deleteCharacterState, id),
+  createGenerationDraft: (novelId: string, policy: GenerationPolicy) =>
+    ipcRenderer.invoke(IPC_CHANNELS.createGenerationDraft, novelId, policy),
+  listGenerationBatches: () =>
+    ipcRenderer.invoke(IPC_CHANNELS.listGenerationBatches),
+  listGenerationJobs: (id: string) =>
+    ipcRenderer.invoke(IPC_CHANNELS.listGenerationJobs, id),
+  setBatchStatus: (id: string, status: GenerationBatch["status"]) =>
+    ipcRenderer.invoke(IPC_CHANNELS.setBatchStatus, id, status),
+  updateGenerationJob: (
+    id: string,
+    status: GenerationJobStatus,
+    patch?: Partial<GenerationJob>,
+  ) => ipcRenderer.invoke(IPC_CHANNELS.updateGenerationJob, id, status, patch),
+  startBackgroundBatch: (id: string) =>
+    ipcRenderer.invoke(IPC_CHANNELS.startBackgroundBatch, id),
+  pauseBackgroundBatch: (id: string) =>
+    ipcRenderer.invoke(IPC_CHANNELS.pauseBackgroundBatch, id),
+};
+
+contextBridge.exposeInMainWorld("amyNovel", api);

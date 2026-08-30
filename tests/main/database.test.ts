@@ -1,0 +1,224 @@
+import { afterAll, describe, expect, it } from "vitest";
+import { NovelDatabase } from "../../src/main/db/database";
+
+let database: NovelDatabase | null = null;
+afterAll(() => database?.close());
+
+describe("NovelDatabase", () => {
+  it("persists chapters and immutable snapshots", async () => {
+    database = await NovelDatabase.open(":memory:");
+    const created = await database.createNovel({
+      title: "测试小说",
+      genre: "科幻",
+      premise: "一段测试设定",
+      targetChapters: 3,
+      chapterWords: 2000,
+    });
+    const first = created.chapters[0];
+    const saved = await database.saveChapter({
+      chapterId: first.id,
+      title: "第一章 起航",
+      outline: "主角离开故乡",
+      content: "星舰在黎明前起飞。",
+    });
+    expect(saved.wordCount).toBe(9);
+    const version = await database.createChapterSnapshot(first.id);
+    expect(version).toMatchObject({
+      versionNo: 1,
+      content: "星舰在黎明前起飞。",
+      origin: "manual",
+    });
+    expect(await database.listNovels()).toHaveLength(1);
+    const sections = await database.listBibleSections(created.novel.id);
+    expect(sections.map((section) => section.kind)).toEqual([
+      "intent",
+      "world",
+      "style",
+      "boundaries",
+    ]);
+    const intent = await database.saveBibleSection({
+      novelId: created.novel.id,
+      kind: "intent",
+      content: "关于选择与代价的故事。",
+    });
+    expect(intent).toMatchObject({
+      versionNo: 2,
+      content: "关于选择与代价的故事。",
+    });
+    const character = await database.saveStoryEntity({
+      novelId: created.novel.id,
+      type: "character",
+      name: "林舟",
+      summary: "星舰领航员",
+      aliases: ["小林", "小林"],
+      profile: { details: "谨慎，但渴望远行。" },
+    });
+    expect(character.aliases).toEqual(["小林"]);
+    expect(
+      await database.listStoryEntities(created.novel.id, "character"),
+    ).toHaveLength(1);
+    const event = await database.saveTimelineEvent({
+      novelId: created.novel.id,
+      chapterId: first.id,
+      storyTime: "星历 217 年",
+      title: "星舰起飞",
+      detail: "林舟离开母星",
+      participantIds: [character.id],
+    });
+    expect(await database.listTimelineEvents(created.novel.id)).toEqual([
+      event,
+    ]);
+    const thread = await database.saveForeshadowThread({
+      novelId: created.novel.id,
+      title: "失效的导航仪",
+      detail: "真正保存着旧航线",
+      setupChapterId: first.id,
+      payoffChapterId: null,
+      status: "planted",
+    });
+    expect(thread.status).toBe("planted");
+    const state = await database.saveCharacterState({
+      novelId: created.novel.id,
+      characterId: character.id,
+      chapterId: first.id,
+      summary: "正式离开母星",
+      location: "远航舰",
+      physical: "健康",
+      emotional: "紧张",
+      knowledge: ["导航仪异常"],
+      goals: ["抵达边境"],
+      inventory: ["旧钥匙"],
+    });
+    expect(state).toMatchObject({
+      location: "远航舰",
+      knowledge: ["导航仪异常"],
+    });
+    const structure = await database.listStoryStructure(created.novel.id);
+    expect(structure.volumes).toHaveLength(1);
+    expect(
+      (await database.listChapters(created.novel.id)).every(
+        (chapter) => chapter.volumeId === structure.volumes[0].id,
+      ),
+    ).toBe(true);
+    const secondVolume = await database.saveVolume({
+      novelId: created.novel.id,
+      title: "第二卷",
+      outline: "进入边境",
+    });
+    const fourth = await database.createChapter({
+      novelId: created.novel.id,
+      volumeId: secondVolume.id,
+      title: "边境来客",
+      targetWords: 2200,
+    });
+    const scene = await database.saveScene({
+      chapterId: fourth.id,
+      title: "截停",
+      summary: "陌生舰船发出警告",
+      viewpoint: "林舟",
+      location: "边境航道",
+      targetWords: 900,
+    });
+    expect(scene.position).toBe(1);
+    const reordered = await database.reorderChapters(created.novel.id, [
+      fourth.id,
+      ...created.chapters.map((chapter) => chapter.id),
+    ]);
+    expect(reordered[0]).toMatchObject({ id: fourth.id, position: 1 });
+    const pack = {
+      chapterId: fourth.id,
+      renderedText: "## 写作任务\n继续故事",
+      contentHash: "1234abcd",
+      inputTokens: 12,
+      outputTokensReserved: 100,
+      totalBudget: 112,
+      sources: [],
+      createdAt: new Date().toISOString(),
+    };
+    await database.saveContextSnapshot(created.novel.id, pack);
+    expect(
+      await database.listContextSnapshots(created.novel.id, fourth.id),
+    ).toEqual([pack]);
+    const usage = await database.saveUsage({
+      novelId: created.novel.id,
+      chapterId: fourth.id,
+      operation: "context_build",
+      provider: "local",
+      model: "estimator",
+      inputTokens: 12,
+      outputTokens: 100,
+      cachedTokens: 0,
+      cost: null,
+      measurement: "estimated",
+    });
+    expect((await database.listUsage(created.novel.id))[0]).toEqual(usage);
+    const profile = await database.saveModelProfile(
+      {
+        name: "DeepSeek",
+        provider: "deepseek",
+        modelId: "deepseek-chat",
+        baseUrl: "https://api.deepseek.com",
+        contextWindow: 64000,
+        inputPricePerMillion: null,
+        outputPricePerMillion: null,
+        isDefault: true,
+        apiKey: "must-not-persist",
+      },
+      true,
+    );
+    expect(profile).toMatchObject({
+      name: "DeepSeek",
+      hasSecret: true,
+      isDefault: true,
+    });
+    expect(JSON.stringify(await database.listModelProfiles())).not.toContain(
+      "must-not-persist",
+    );
+    const candidate = await database.createChapterCandidate({
+      novelId: created.novel.id,
+      chapterId: fourth.id,
+      profileId: profile.id,
+      contextHash: "1234abcd",
+      content: "边境的灯火逐次熄灭。",
+      inputTokens: 120,
+      outputTokens: 20,
+      cachedTokens: 10,
+    });
+    expect(candidate).toMatchObject({ status: "candidate", wordCount: 10 });
+    const accepted = await database.setCandidateStatus(
+      candidate.id,
+      "accepted",
+    );
+    expect(accepted.status).toBe("accepted");
+    expect((await database.getChapter(fourth.id))?.content).toBe(
+      candidate.content,
+    );
+    expect((await database.listChapterVersions(fourth.id))[0]).toMatchObject({
+      origin: "accepted",
+      content: candidate.content,
+    });
+    const batchResult = await database.createGenerationBatch(created.novel.id, {
+      startChapter: 1,
+      endChapter: 2,
+      chapterWords: 2000,
+      continuityCheck: true,
+      maxRetries: 2,
+      approvalMode: "candidate",
+      outputTokenBudget: 10000,
+    });
+    const jobs = await database.listGenerationJobs(batchResult.id);
+    expect(jobs).toHaveLength(2);
+    const running = await database.updateGenerationJob(
+      jobs[0].id,
+      "generating",
+      { attempt: 1 },
+    );
+    expect(running).toMatchObject({ status: "generating", attempt: 1 });
+    await database.updateGenerationJob(jobs[0].id, "candidate_ready", {
+      outputTokens: 1200,
+    });
+    expect(
+      (await database.getGenerationBatch(batchResult.id))?.outputTokensUsed,
+    ).toBe(1200);
+  });
+});

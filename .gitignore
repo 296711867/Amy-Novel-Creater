@@ -1,0 +1,14 @@
+node_modules/
+out/
+dist/
+dist-web/
+*.db
+*.db-wal
+*.db-shm
+*.log
+*.tsbuildinfo
+.env
+.env.*
+!.env.example
+release/
+build/

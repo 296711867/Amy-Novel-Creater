@@ -1,0 +1,28 @@
+appId: com.amy.novel
+productName: Amy Novel
+copyright: Copyright © 2026 PAN
+directories:
+  output: release
+  buildResources: build
+files:
+  - out/**
+  - package.json
+asar: true
+asarUnpack:
+  - node_modules/@libsql/**
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+  icon: build/icons/icon.ico
+  artifactName: Amy-Novel-${version}-Setup-${arch}.${ext}
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: always
+  createStartMenuShortcut: true
+  shortcutName: Amy Novel
+  uninstallDisplayName: Amy Novel
+  deleteAppDataOnUninstall: false
+publish: null

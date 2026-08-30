@@ -1,0 +1,56 @@
+{
+  "name": "amy-novel",
+  "version": "0.1.0",
+  "description": "Amy Novel - local-first AI long-form fiction studio",
+  "main": "./out/main/index.js",
+  "author": "PAN",
+  "productName": "Amy Novel",
+  "license": "Apache-2.0",
+  "type": "module",
+  "packageManager": "pnpm@11.19.0",
+  "engines": {
+    "node": ">=20",
+    "pnpm": ">=10 <12"
+  },
+  "scripts": {
+    "dev": "electron-vite dev",
+    "dev:web": "vite --config vite.web.config.ts",
+    "build": "electron-vite build",
+    "build:web": "vite build --config vite.web.config.ts",
+    "build:win": "pnpm build && electron-builder --win nsis",
+    "build:unpack": "pnpm build && electron-builder --dir",
+    "icons": "node ./node_modules/@arcsin1/electron-icon-builder/index.js --input=./resources/amy-novel-icon.png --output=build --flatten",
+    "start": "electron-vite preview",
+    "typecheck:node": "tsc --noEmit -p tsconfig.node.json --composite false",
+    "typecheck:web": "tsc --noEmit -p tsconfig.web.json --composite false",
+    "typecheck": "pnpm typecheck:node && pnpm typecheck:web",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@electron-toolkit/preload": "^3.0.2",
+    "@electron-toolkit/utils": "^4.0.0",
+    "@libsql/client": "^0.14.0",
+    "clsx": "^2.1.1",
+    "lucide-react": "^0.574.0",
+    "nanoid": "^5.1.9",
+    "react": "^19.2.1",
+    "react-dom": "^19.2.1",
+    "react-router-dom": "^7.1.1",
+    "zod": "^4.4.3",
+    "zustand": "^5.0.3"
+  },
+  "devDependencies": {
+    "@arcsin1/electron-icon-builder": "^1.0.2",
+    "@electron-toolkit/tsconfig": "^2.0.0",
+    "@types/node": "^22.19.1",
+    "@types/react": "^19.2.7",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^5.1.1",
+    "electron": "^39.2.6",
+    "electron-builder": "^26.15.3",
+    "electron-vite": "^5.0.0",
+    "typescript": "^5.9.3",
+    "vite": "^7.2.6",
+    "vitest": "^4.1.6"
+  }
+}
