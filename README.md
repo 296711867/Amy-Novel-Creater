@@ -29,6 +29,7 @@ pnpm dev
 - [技术架构](docs/TECHNICAL_ARCHITECTURE.md)
 - [数据库设计](docs/DATABASE_DESIGN.md)
 - [阶段路线图](docs/ROADMAP.md)
+- [AI 全自动小说工作流设计](docs/AUTOPILOT_DESIGN.md)
 - [Windows 发布说明](docs/RELEASE.md)
 - [0.1.0 发布验收报告](docs/ACCEPTANCE_REPORT.md)
 
