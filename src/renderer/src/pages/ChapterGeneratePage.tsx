@@ -2,7 +2,6 @@ import { useEffect, useState } from "react";
 import { ArrowLeft, Check, Play, Sparkles, X } from "lucide-react";
 import { nanoid } from "nanoid";
 import { NavLink, Navigate, useParams } from "react-router-dom";
-import type { ChapterCandidate } from "@domain/chapter-generation";
 import { useNovelStore } from "../store/novel-store";
 import "../generation.css";
 const EMPTY: any[] = [];
@@ -13,14 +12,28 @@ export function ChapterGeneratePage(): React.JSX.Element {
       (s.chapters[novelId] ?? EMPTY).find((c) => c.id === chapterId),
     ),
     profiles = useNovelStore((s) => s.modelProfiles),
+    // 候选稿与“生成中”都来自全局 store：切页回来依然能看到进行中状态和最新候选。
+    candidate = useNovelStore(
+      (s) => (s.candidates[chapterId] ?? EMPTY)[0] ?? null,
+    ),
+    active = useNovelStore((s) => s.activeRequests[chapterId]),
     store = useNovelStore();
   const [profileId, setProfileId] = useState(""),
     [maxTokens, setMaxTokens] = useState(6000),
     [temperature, setTemperature] = useState(0.8),
     [stream, setStream] = useState(""),
-    [candidate, setCandidate] = useState<ChapterCandidate | null>(null),
     [status, setStatus] = useState("准备生成"),
     [error, setError] = useState("");
+  const generating = Boolean(active),
+    elapsed = active
+      ? Math.max(0, Math.round((Date.now() - active.startedAt) / 1000))
+      : 0,
+    [, setTick] = useState(0);
+  useEffect(() => {
+    if (!active) return;
+    const timer = window.setInterval(() => setTick((value) => value + 1), 1000);
+    return () => window.clearInterval(timer);
+  }, [active?.requestId]);
   useEffect(() => {
     void Promise.all([
       store.loadChapters(novelId),
@@ -34,10 +47,9 @@ export function ChapterGeneratePage(): React.JSX.Element {
   }, [profiles, profileId]);
   if (!novel) return <Navigate to="/novels" replace />;
   async function start() {
-    if (!profileId || !chapter) return;
+    if (!profileId || !chapter || generating) return;
     setError("");
     setStream("");
-    setCandidate(null);
     setStatus("正在构建 Context Pack…");
     try {
       const profile = profiles.find((p) => p.id === profileId)!,
@@ -72,7 +84,6 @@ export function ChapterGeneratePage(): React.JSX.Element {
             );
         },
       );
-      setCandidate(item);
       setStream(item.content);
       setStatus(`候选稿已保存 · ${item.wordCount} 字`);
     } catch (value) {
@@ -82,8 +93,7 @@ export function ChapterGeneratePage(): React.JSX.Element {
   }
   async function review(accept: boolean) {
     if (!candidate) return;
-    const item = await store.reviewCandidate(candidate.id, accept);
-    setCandidate(item);
+    await store.reviewCandidate(candidate.id, accept);
     setStatus(accept ? "已接受并写入章节版本" : "已拒绝，候选稿仍保留用于追溯");
   }
   return (
@@ -97,7 +107,11 @@ export function ChapterGeneratePage(): React.JSX.Element {
           <span className="kicker">AI CHAPTER RUN</span>
           <h1>{chapter?.title ?? "加载章节…"}</h1>
         </div>
-        <span>{status}</span>
+        <span>
+          {generating
+            ? `模型正在写作… 已进行 ${elapsed} 秒（切页不会中断）`
+            : status}
+        </span>
       </header>
       <div className="generation-layout">
         <aside>
@@ -138,11 +152,17 @@ export function ChapterGeneratePage(): React.JSX.Element {
           </label>
           <button
             className="primary"
-            disabled={!chapter || !profileId || status === "模型正在写作…"}
+            disabled={
+              !chapter ||
+              !profileId ||
+              generating ||
+              status === "正在构建 Context Pack…"
+            }
             onClick={start}
+            title={generating ? "本章节正在生成中，请等待完成" : undefined}
           >
             <Play size={16} />
-            构建上下文并生成
+            {generating ? `生成中… ${elapsed} 秒` : "构建上下文并生成"}
           </button>
           {error && <div className="error">{error}</div>}
           <div className="generation-note">
@@ -172,7 +192,11 @@ export function ChapterGeneratePage(): React.JSX.Element {
             )}
           </div>
           <pre className={stream ? "" : "waiting"}>
-            {stream || "生成内容将在这里逐字出现。"}
+            {stream ||
+              (generating
+                ? "本章仍在后台生成中，切页不会中断；实时流式预览只在生成期间停留本页时显示，完成后候选稿会自动出现在上方。"
+                : (candidate?.content ??
+                  "生成内容将在这里逐字出现。"))}
           </pre>
         </section>
       </div>

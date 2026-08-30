@@ -1,0 +1,34 @@
+.novel-card {
+  position: relative;
+}
+
+.novel-card-link {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  gap: 16px;
+}
+
+.novel-card-link > div:last-child {
+  min-width: 0;
+  padding-right: 24px;
+}
+
+.novel-delete {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: #b74940;
+}
+
+.novel-delete:hover {
+  background: #ffe4e1;
+  border-color: #d88f88;
+}

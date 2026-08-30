@@ -1,5 +1,14 @@
-import { buildContextPack, estimateTokens } from "@domain/context-pack";
-import type { GenerationBatch, GenerationJob } from "@domain/generation";
+import {
+  buildContextPack,
+  estimateTokens,
+  selectRecentChapters,
+} from "@domain/context-pack";
+import {
+  retryDelayMs,
+  waitForRetry,
+  type GenerationBatch,
+  type GenerationJob,
+} from "@domain/generation";
 import type { ModelProfile } from "@domain/model-profile";
 import type { UsageMeasurement } from "@domain/usage";
 import type { NovelDatabase } from "../db/database";
@@ -15,8 +24,8 @@ import {
   parseChapterReview,
 } from "@domain/chapter-review";
 import { namePoolText } from "@domain/name-pool";
+import { ModelRequestError } from "@domain/model-profile";
 
-const MAX_CONCURRENCY = 3;
 type StreamResult = Awaited<ReturnType<typeof streamOpenAICompatible>>;
 
 export class BatchRunner {
@@ -52,10 +61,8 @@ export class BatchRunner {
     const apiKey = await this.secrets.get(profile.id);
     await this.database.recoverGenerationJobs(batchId);
     await this.database.setBatchStatus(batchId, "running");
-    const limit = Math.min(
-      Math.max(1, batch.policy.concurrency ?? 1),
-      MAX_CONCURRENCY,
-    );
+    // 长篇默认使用上一章候选链；同一本书必须串行，避免后章越过前章。
+    const limit = 1;
     const inFlight = new Map<string, Promise<void>>();
     while (!controller.signal.aborted) {
       const current = await this.database.getGenerationBatch(batchId);
@@ -187,6 +194,27 @@ export class BatchRunner {
         current.novelId,
         novel.genre,
       );
+      const chainJobs = (await this.database.listGenerationJobs(current.id))
+          .filter((item) => item.position < job.position && item.candidateId)
+          .slice(-2),
+        candidateChain = (
+          await Promise.all(
+            chainJobs.map(async (item) => {
+              const base = chapters.find(
+                  (chapterItem) => chapterItem.id === item.chapterId,
+                ),
+                candidate = item.candidateId
+                  ? await this.database.getChapterCandidate(item.candidateId)
+                  : null;
+              return base && candidate
+                ? {
+                    ...base,
+                    content: `【本批次候选稿，尚未进入正史】\n${candidate.content}`,
+                  }
+                : null;
+            }),
+          )
+        ).filter((item): item is NonNullable<typeof item> => item !== null);
       const output = Math.min(
         Math.ceil(current.policy.chapterWords * 1.5),
         profile.contextWindow - 4000,
@@ -213,11 +241,11 @@ export class BatchRunner {
         ),
         foreshadow,
         characterStates: states,
-        recentChapters: chapters
-          .filter(
-            (item) => item.position < chapter.position && item.content.trim(),
-          )
-          .slice(-2),
+        recentChapters: selectRecentChapters(
+          chapters,
+          chapter.position,
+          candidateChain,
+        ),
         inputBudget: Math.max(4000, profile.contextWindow - output),
         outputTokensReserved: output,
         namePoolHint: pool.usedNames.length ? namePoolText(pool) : undefined,
@@ -346,12 +374,29 @@ export class BatchRunner {
         return;
       }
       const attempt = job.attempt + 1,
+        retryable =
+          !(error instanceof ModelRequestError) || error.retryable === true,
         status =
-          attempt <= current.policy.maxRetries ? "waiting_retry" : "failed";
+          retryable && attempt <= current.policy.maxRetries
+            ? "waiting_retry"
+            : "failed";
       await this.database.updateGenerationJob(job.id, status, {
         attempt,
         error: error instanceof Error ? error.message : "生成失败",
       });
+      if (status === "waiting_retry") {
+        const retryAfter =
+            error instanceof ModelRequestError ? error.retryAfterMs : null,
+          resumed = await waitForRetry(
+            retryDelayMs(attempt, retryAfter),
+            signal,
+          );
+        await this.database.updateGenerationJob(
+          job.id,
+          resumed ? "queued" : "paused",
+          resumed ? {} : { error: "用户暂停" },
+        );
+      }
     }
   }
 }

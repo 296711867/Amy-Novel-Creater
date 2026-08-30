@@ -14,6 +14,9 @@
 novels 1─N volumes 1─N chapters 1─N scenes
   │                      ├─N chapter_versions
   │                      ├─N chapter_candidates
+  ├─1 planning_workflows
+  ├─N planning_runs
+  ├─N planning_cycles 1─N planning_proposals
   ├─N story_entities     └─N continuity_findings
   ├─N canon_facts
   ├─N timeline_events
@@ -27,12 +30,24 @@ novels 1─N volumes 1─N chapters 1─N scenes
 
 ### 作品结构
 
-- `novels(id, title, genre, premise, target_words, target_chapters, status, settings_json)`
+- `novels(id, title, genre, premise, target_words, target_chapters, chapter_words, cycle_size, status, created_at, updated_at)`（`cycle_size` 为滚动规划每批章数，5–15，默认 10；旧库经迁移补列）
 - `volumes(id, novel_id, position, title, synopsis, target_words)`
 - `chapters(id, volume_id, position, title, outline, status, active_version_id)`
 - `scenes(id, chapter_id, position, title, purpose, pov_character_id, outline)`
 - `chapter_versions(id, chapter_id, version_no, origin, content, word_count, content_hash, accepted_at)`
 - `chapter_candidates(id, chapter_id, generation_job_id, content, status, base_version_id)`
+- `planning_workflows(novel_id, brief_json, confirmed_steps_json, updated_at)`
+
+`planning_workflows` 保存作者原始创作简报与十步向导的连续确认列表。它不是自动运行记录；
+未来后台 Autopilot 使用独立的 `workflow_runs`，避免把人工审核状态和执行状态混在一起。
+
+当前滚动策划已使用：
+
+- `planning_runs`：模型、阶段、章节范围、Prompt 哈希、原始响应、Token、状态与错误；
+- `planning_cycles`：十章范围、周期状态、目标、开场、高潮、预期和实际结束状态；
+- `planning_proposals`：前置实体设定的新增/更新候选、原因与审核状态。
+
+这三类数据均进入完整项目包。规划解析失败不会丢失模型原始响应。
 
 ### 故事圣经与正史
 
@@ -46,6 +61,9 @@ novels 1─N volumes 1─N chapters 1─N scenes
 - `chapter_summaries(id, chapter_id, version_id, summary, key_events_json)`
 
 每条正史记录必须能追溯到一个已接受章节版本或作者手动变更。
+
+当前可用的动态人物记忆表为 `character_states`，按章节保存摘要、位置、身体、情绪、知识、
+目标、道具和技能。通用 `entity_states`、关系版本和章节改写失效传播仍属于下一阶段。
 
 ### 生成系统
 

@@ -40,6 +40,7 @@ export interface CharacterState {
   knowledge: string[];
   goals: string[];
   inventory: string[];
+  skills: string[];
   source: CanonSource;
   createdAt: string;
   updatedAt: string;

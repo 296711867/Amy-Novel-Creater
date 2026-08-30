@@ -96,6 +96,20 @@ describe("project restore", () => {
         characterStates: [],
         usage: [],
         candidates: [],
+        workflow: {
+          novelId: "old",
+          brief: {
+            audience: "硬科幻读者",
+            style: "克制",
+            boundaries: "不复活",
+            sellingPoint: "代际远航",
+            conflict: "资源与时间",
+            protagonistGoal: "抵达新家园",
+            ending: "开放式",
+          },
+          confirmedSteps: [1, 2],
+          updatedAt: now,
+        },
       };
     const restored = await database.importNovelProject(bundle),
       chapters = await database.listChapters(restored.id),
@@ -107,6 +121,11 @@ describe("project restore", () => {
     expect(timeline[0]).toMatchObject({
       chapterId: chapters[0].id,
       participantIds: [entities[0].id],
+    });
+    expect(await database.getPlanningWorkflow(restored.id)).toMatchObject({
+      novelId: restored.id,
+      confirmedSteps: [1, 2],
+      brief: { audience: "硬科幻读者" },
     });
   });
 });

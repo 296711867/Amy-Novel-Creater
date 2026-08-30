@@ -1,4 +1,9 @@
 import type { Novel, Chapter, ChapterVersion } from "./novel";
+import {
+  CYCLE_SIZE_DEFAULT,
+  CYCLE_SIZE_MAX,
+  CYCLE_SIZE_MIN,
+} from "./novel";
 import type { BibleSection, StoryEntity } from "./story-bible";
 import type { StoryVolume, StoryScene } from "./story-structure";
 import type {
@@ -8,6 +13,10 @@ import type {
 } from "./continuity";
 import type { UsageRecord } from "./usage";
 import type { ChapterCandidate } from "./chapter-generation";
+import type { PlanningWorkflow } from "./planning-workflow";
+import type { PlanningRun } from "./planning-run";
+import type { PlanningCycle } from "./planning-cycle";
+import type { PlanningProposal } from "./planning-proposal";
 import { z } from "zod";
 
 export interface NovelProjectBundle {
@@ -26,6 +35,10 @@ export interface NovelProjectBundle {
   characterStates: CharacterState[];
   usage: UsageRecord[];
   candidates: ChapterCandidate[];
+  workflow?: PlanningWorkflow;
+  planningRuns?: PlanningRun[];
+  planningCycles?: PlanningCycle[];
+  planningProposals?: PlanningProposal[];
 }
 
 export function novelAsMarkdown(novel: Novel, chapters: Chapter[]): string {
@@ -57,6 +70,13 @@ const novelSchema = z.object({
   targetWords: z.number(),
   targetChapters: z.number().int().positive(),
   chapterWords: z.number().positive(),
+  // 旧版本项目包没有批次大小，导入时回退默认十章。
+  cycleSize: z
+    .number()
+    .int()
+    .min(CYCLE_SIZE_MIN)
+    .max(CYCLE_SIZE_MAX)
+    .default(CYCLE_SIZE_DEFAULT),
   status: z.enum(["planning", "writing", "paused", "completed", "archived"]),
   createdAt: text,
   updatedAt: text,
@@ -167,6 +187,7 @@ const stateSchema = z.object({
   knowledge: strings,
   goals: strings,
   inventory: strings,
+  skills: strings.default([]),
   source: z.enum(["manual", "accepted_chapter", "ai_candidate"]),
   createdAt: text,
   updatedAt: text,
@@ -175,7 +196,13 @@ const usageSchema = z.object({
   id: text,
   novelId: text,
   chapterId: nullableText,
-  operation: z.enum(["context_build", "generation", "continuity_check"]),
+  operation: z.enum([
+    "context_build",
+    "generation",
+    "continuity_check",
+    "chapter_review",
+    "planning",
+  ]),
   provider: text,
   model: text,
   inputTokens: z.number(),
@@ -200,6 +227,46 @@ const candidateSchema = z.object({
   createdAt: text,
   updatedAt: text,
 });
+const planningBriefSchema = z.object({
+  audience: text,
+  style: text,
+  boundaries: text,
+  sellingPoint: text,
+  conflict: text,
+  protagonistGoal: text,
+  ending: text,
+});
+const workflowSchema = z.object({
+  novelId: text,
+  brief: planningBriefSchema,
+  confirmedSteps: z.array(z.number().int().min(1).max(9)),
+  updatedAt: text,
+});
+const planningRunSchema = z.object({
+  id: text, novelId: text,
+  phase: z.enum(["bible", "structure", "cast", "scenes"]),
+  startChapter: z.number().nullable(), endChapter: z.number().nullable(),
+  profileId: text, provider: text, model: text, promptHash: text,
+  rawResponse: text, inputTokens: z.number(), outputTokens: z.number(),
+  cachedTokens: z.number(),
+  status: z.enum(["running", "received", "completed", "failed"]),
+  error: text, createdAt: text, updatedAt: text,
+});
+const planningCycleSchema = z.object({
+  id: text, novelId: text, startChapter: z.number(), endChapter: z.number(),
+  status: z.enum(["planning", "proposal_review", "plan_review", "ready", "generating", "memory_review", "completed", "failed", "needs_revision", "superseded"]),
+  goal: text, openingState: text, climax: text, expectedClosingState: text,
+  actualClosingState: text, createdAt: text, updatedAt: text,
+});
+const planningProposalSchema = z.object({
+  id: text, novelId: text, cycleId: text, startChapter: z.number(), endChapter: z.number(),
+  action: z.enum(["add", "update"]),
+  targetType: z.enum(["character", "location", "organization", "item", "term"]),
+  targetName: text,
+  patch: z.object({ summary: text.optional(), aliases: strings.optional(), profile: z.record(text, text).optional() }),
+  reason: text, status: z.enum(["pending", "accepted", "rejected"]),
+  createdAt: text, updatedAt: text,
+});
 const bundleSchema = z.object({
   format: z.literal("amy-novel-project"),
   version: z.literal(1),
@@ -216,7 +283,11 @@ const bundleSchema = z.object({
   characterStates: z.array(stateSchema),
   usage: z.array(usageSchema),
   candidates: z.array(candidateSchema),
+  workflow: workflowSchema.optional(),
+  planningRuns: z.array(planningRunSchema).optional(),
+  planningCycles: z.array(planningCycleSchema).optional(),
+  planningProposals: z.array(planningProposalSchema).optional(),
 });
 export function parseNovelProject(value: unknown): NovelProjectBundle {
-  return bundleSchema.parse(value);
+  return bundleSchema.parse(value) as NovelProjectBundle;
 }

@@ -3,12 +3,16 @@ import { nanoid } from "nanoid";
 import {
   buildInitialChapters,
   calculateTargetWords,
+  normalizeCycleSize,
   type Chapter,
   type CreateNovelInput,
   type Novel,
 } from "@domain/novel";
 import type { NovelProjectBundle } from "@domain/project-export";
 import type { DbRow } from "./shared";
+
+const NOVEL_COLUMNS =
+  "id, title, genre, premise, target_words, target_chapters, chapter_words, status, created_at, updated_at, cycle_size";
 
 function novelFrom(row: DbRow): Novel {
   return {
@@ -19,6 +23,7 @@ function novelFrom(row: DbRow): Novel {
     targetWords: Number(row.target_words),
     targetChapters: Number(row.target_chapters),
     chapterWords: Number(row.chapter_words),
+    cycleSize: normalizeCycleSize(row.cycle_size as number | null),
     status: row.status as Novel["status"],
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
@@ -41,6 +46,37 @@ export function createNovelsRepository(client: Client) {
     return result.rows[0] ? novelFrom(result.rows[0] as DbRow) : null;
   }
 
+  async function deleteNovel(id: string): Promise<void> {
+    if (!(await getNovel(id))) throw new Error("作品不存在");
+    const args = [id];
+    await client.batch(
+      [
+        "DELETE FROM continuity_findings WHERE chapter_id IN (SELECT id FROM chapters WHERE novel_id=?)",
+        "DELETE FROM fact_proposals WHERE chapter_id IN (SELECT id FROM chapters WHERE novel_id=?)",
+        "DELETE FROM chapter_versions WHERE chapter_id IN (SELECT id FROM chapters WHERE novel_id=?)",
+        "DELETE FROM story_scenes WHERE chapter_id IN (SELECT id FROM chapters WHERE novel_id=?)",
+        "DELETE FROM generation_jobs WHERE batch_id IN (SELECT id FROM generation_batches WHERE novel_id=?)",
+        "DELETE FROM chapter_candidates WHERE novel_id=?",
+        "DELETE FROM context_snapshots WHERE novel_id=?",
+        "DELETE FROM usage_records WHERE novel_id=?",
+        "DELETE FROM timeline_events WHERE novel_id=?",
+        "DELETE FROM foreshadow_threads WHERE novel_id=?",
+        "DELETE FROM character_states WHERE novel_id=?",
+        "DELETE FROM story_bibles WHERE novel_id=?",
+        "DELETE FROM story_entities WHERE novel_id=?",
+        "DELETE FROM story_volumes WHERE novel_id=?",
+        "DELETE FROM name_pools WHERE novel_id=?",
+        "DELETE FROM planning_runs WHERE novel_id=?",
+        "DELETE FROM planning_cycles WHERE novel_id=?",
+        "DELETE FROM planning_workflows WHERE novel_id=?",
+        "DELETE FROM chapters WHERE novel_id=?",
+        "DELETE FROM generation_batches WHERE novel_id=?",
+        "DELETE FROM novels WHERE id=?",
+      ].map((sql) => ({ sql, args })),
+      "write",
+    );
+  }
+
   async function createNovel(
     input: CreateNovelInput,
   ): Promise<{ novel: Novel; chapters: Chapter[] }> {
@@ -51,6 +87,7 @@ export function createNovelsRepository(client: Client) {
       ...input,
       premise: input.premise.trim(),
       targetWords: calculateTargetWords(input),
+      cycleSize: normalizeCycleSize(input.cycleSize),
       status: "planning",
       createdAt: now,
       updatedAt: now,
@@ -63,7 +100,7 @@ export function createNovelsRepository(client: Client) {
     await client.batch(
       [
         {
-          sql: "INSERT INTO novels VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+          sql: `INSERT INTO novels (${NOVEL_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           args: [
             novel.id,
             novel.title,
@@ -75,6 +112,7 @@ export function createNovelsRepository(client: Client) {
             novel.status,
             novel.createdAt,
             novel.updatedAt,
+            novel.cycleSize,
           ],
         },
         ...chapters.map((chapter) => ({
@@ -108,6 +146,7 @@ export function createNovelsRepository(client: Client) {
         ...bundle.novel,
         id,
         title: `${bundle.novel.title}（恢复）`,
+        cycleSize: normalizeCycleSize(bundle.novel.cycleSize),
         createdAt: now,
         updatedAt: now,
       };
@@ -121,10 +160,13 @@ export function createNovelsRepository(client: Client) {
       entityIds = new Map(bundle.entities.map((item) => [item.id, nanoid()])),
       candidateIds = new Map(
         bundle.candidates.map((item) => [item.id, nanoid()]),
+      ),
+      cycleIds = new Map(
+        (bundle.planningCycles ?? []).map((item) => [item.id, nanoid()]),
       );
     const commands: InStatement[] = [];
     commands.push({
-      sql: "INSERT INTO novels VALUES (?,?,?,?,?,?,?,?,?,?)",
+      sql: `INSERT INTO novels (${NOVEL_COLUMNS}) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
       args: [
         id,
         novel.title,
@@ -136,8 +178,50 @@ export function createNovelsRepository(client: Client) {
         novel.status,
         now,
         now,
+        novel.cycleSize,
       ],
     });
+    if (bundle.workflow)
+      commands.push({
+        sql: "INSERT INTO planning_workflows (novel_id,brief_json,confirmed_steps_json,updated_at) VALUES (?,?,?,?)",
+        args: [
+          id,
+          JSON.stringify(bundle.workflow.brief),
+          JSON.stringify(bundle.workflow.confirmedSteps),
+          bundle.workflow.updatedAt,
+        ],
+      });
+    for (const item of bundle.planningRuns ?? [])
+      commands.push({
+        sql: "INSERT INTO planning_runs VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        args: [
+          nanoid(), id, item.phase, item.startChapter, item.endChapter,
+          item.profileId, item.provider, item.model, item.promptHash,
+          item.rawResponse, item.inputTokens, item.outputTokens,
+          item.cachedTokens, item.status, item.error, item.createdAt, item.updatedAt,
+        ],
+      });
+    for (const item of bundle.planningCycles ?? [])
+      commands.push({
+        sql: "INSERT INTO planning_cycles VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+        args: [
+          cycleIds.get(item.id)!, id, item.startChapter, item.endChapter,
+          item.status, item.goal, item.openingState, item.climax,
+          item.expectedClosingState, item.actualClosingState,
+          item.createdAt, item.updatedAt,
+        ],
+      });
+    for (const item of bundle.planningProposals ?? [])
+      if (cycleIds.has(item.cycleId))
+        commands.push({
+          sql: "INSERT INTO planning_proposals VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+          args: [
+            nanoid(), id, cycleIds.get(item.cycleId)!, item.startChapter,
+            item.endChapter, item.action, item.targetType, item.targetName,
+            JSON.stringify(item.patch), item.reason, item.status,
+            item.createdAt, item.updatedAt,
+          ],
+        });
     for (const item of bundle.volumes)
       commands.push({
         sql: "INSERT INTO story_volumes VALUES (?,?,?,?,?,?,?)",
@@ -268,7 +352,7 @@ export function createNovelsRepository(client: Client) {
     for (const item of bundle.characterStates)
       if (entityIds.has(item.characterId))
         commands.push({
-          sql: "INSERT INTO character_states VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+          sql: "INSERT INTO character_states (id,novel_id,character_id,chapter_id,summary,location,physical,emotional,knowledge_json,goals_json,inventory_json,skills_json,source,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
           args: [
             nanoid(),
             id,
@@ -281,6 +365,7 @@ export function createNovelsRepository(client: Client) {
             JSON.stringify(item.knowledge),
             JSON.stringify(item.goals),
             JSON.stringify(item.inventory),
+            JSON.stringify(item.skills),
             item.source,
             item.createdAt,
             item.updatedAt,
@@ -328,5 +413,23 @@ export function createNovelsRepository(client: Client) {
     return novel;
   }
 
-  return { listNovels, getNovel, createNovel, importNovelProject };
+  async function updateCycleSize(id: string, cycleSize: number): Promise<Novel> {
+    const novel = await getNovel(id);
+    if (!novel) throw new Error("作品不存在");
+    const normalized = normalizeCycleSize(cycleSize);
+    await client.execute({
+      sql: "UPDATE novels SET cycle_size=?, updated_at=? WHERE id=?",
+      args: [normalized, new Date().toISOString(), id],
+    });
+    return (await getNovel(id))!;
+  }
+
+  return {
+    listNovels,
+    getNovel,
+    deleteNovel,
+    createNovel,
+    importNovelProject,
+    updateCycleSize,
+  };
 }

@@ -7,15 +7,13 @@ import {
   ChevronRight,
   Feather,
   Home,
-  Layers,
   Library,
-  Map,
-  Users,
   Pause,
   Play,
   Plus,
   Settings,
   Sparkles,
+  Trash2,
   WandSparkles,
 } from "lucide-react";
 import {
@@ -31,7 +29,7 @@ import {
   validateChapterRange,
   type GenerationPolicy,
 } from "@domain/generation";
-import type { PlanPhase } from "@domain/planning";
+import { CYCLE_SIZE_MAX, CYCLE_SIZE_MIN } from "@domain/novel";
 import { useNovelStore } from "./store/novel-store";
 import { WriterPage } from "./pages/WriterPage";
 import { BiblePage } from "./pages/BiblePage";
@@ -43,6 +41,8 @@ import { SettingsPage } from "./pages/SettingsPage";
 import { ChapterGeneratePage } from "./pages/ChapterGeneratePage";
 import { BatchesPage } from "./pages/BatchesPage";
 import { DataPage } from "./pages/DataPage";
+import { PlanningWorkflowPage } from "./pages/PlanningWorkflowPage";
+import "./novel-actions.css";
 
 const genres = ["玄幻", "都市", "科幻", "悬疑", "言情", "历史", "奇幻", "其他"];
 
@@ -145,37 +145,68 @@ function HomePage(): React.JSX.Element {
 
 function NovelGrid({
   novels,
+  onDelete,
 }: {
   novels: ReturnType<typeof useNovelStore.getState>["novels"];
+  onDelete?: (
+    novel: ReturnType<typeof useNovelStore.getState>["novels"][number],
+  ) => void;
 }): React.JSX.Element {
   return (
     <div className="novel-grid">
       {novels.map((novel) => (
-        <NavLink
-          key={novel.id}
-          className="novel-card"
-          to={`/novels/${novel.id}/plan`}
-        >
-          <div className="cover">
-            <Feather />
-            <span>{novel.genre}</span>
-          </div>
-          <div>
-            <h3>{novel.title}</h3>
-            <p>{novel.premise || "尚未填写故事简介"}</p>
-            <small>
-              {novel.targetChapters} 章 · 预计{" "}
-              {novel.targetWords.toLocaleString()} 字
-            </small>
-          </div>
-        </NavLink>
+        <article key={novel.id} className="novel-card">
+          <NavLink
+            className="novel-card-link"
+            to={`/novels/${novel.id}/plan`}
+          >
+            <div className="cover">
+              <Feather />
+              <span>{novel.genre}</span>
+            </div>
+            <div>
+              <h3>{novel.title}</h3>
+              <p>{novel.premise || "尚未填写故事简介"}</p>
+              <small>
+                {novel.targetChapters} 章 · 预计{" "}
+                {novel.targetWords.toLocaleString()} 字
+              </small>
+            </div>
+          </NavLink>
+          {onDelete && (
+            <button
+              className="novel-delete"
+              aria-label={`删除《${novel.title}》`}
+              title="永久删除作品"
+              onClick={() => onDelete(novel)}
+            >
+              <Trash2 size={15} />
+            </button>
+          )}
+        </article>
       ))}
     </div>
   );
 }
 
 function NovelsPage(): React.JSX.Element {
-  const novels = useNovelStore((s) => s.novels);
+  const novels = useNovelStore((s) => s.novels),
+    deleteNovel = useNovelStore((s) => s.deleteNovel);
+  const [error, setError] = useState("");
+  async function remove(novel: (typeof novels)[number]) {
+    if (
+      !window.confirm(
+        `确定永久删除《${novel.title}》吗？\n\n章节、版本、候选稿、正史和生成记录都会删除，且无法恢复。`,
+      )
+    )
+      return;
+    setError("");
+    try {
+      await deleteNovel(novel.id);
+    } catch (value) {
+      setError(value instanceof Error ? value.message : "删除失败");
+    }
+  }
   return (
     <main className="page">
       <div className="page-heading">
@@ -189,8 +220,9 @@ function NovelsPage(): React.JSX.Element {
           新建小说
         </NavLink>
       </div>
+      {error && <div className="error">{error}</div>}
       {novels.length ? (
-        <NovelGrid novels={novels} />
+        <NovelGrid novels={novels} onDelete={(novel) => void remove(novel)} />
       ) : (
         <div className="empty-state">
           <BookOpen size={44} />
@@ -208,19 +240,45 @@ function NovelsPage(): React.JSX.Element {
 function NewNovelPage(): React.JSX.Element {
   const navigate = useNavigate();
   const createNovel = useNovelStore((s) => s.createNovel);
+  const suggestScope = useNovelStore((s) => s.suggestScope);
+  const clearScopeAdvice = useNovelStore((s) => s.clearScopeAdvice);
+  const scopeAdvice = useNovelStore((s) => s.scopeAdvice);
+  const scopeAdviceBusy = useNovelStore((s) => s.scopeAdviceBusy);
+  const scopeAdviceError = useNovelStore((s) => s.scopeAdviceError);
   const [form, setForm] = useState({
     title: "",
     genre: "玄幻",
     premise: "",
     targetChapters: 100,
     chapterWords: 3000,
+    cycleSize: 10,
   });
+  const [advisorNotes, setAdvisorNotes] = useState("");
+  const [advisorOpen, setAdvisorOpen] = useState(false);
   const total = form.targetChapters * form.chapterWords;
   async function submit(event: FormEvent) {
     event.preventDefault();
     if (!form.title.trim()) return;
     const novel = await createNovel(form);
+    clearScopeAdvice();
     navigate(`/novels/${novel.id}/plan`);
+  }
+  async function askAmy() {
+    await suggestScope({
+      title: form.title,
+      genre: form.genre,
+      premise: form.premise,
+      notes: advisorNotes,
+    });
+  }
+  function applyAdvice() {
+    if (!scopeAdvice) return;
+    const r = scopeAdvice.recommendation;
+    setForm((current) => ({
+      ...current,
+      targetChapters: r.totalChapters,
+      chapterWords: r.chapterWords,
+    }));
   }
   return (
     <main className="page narrow">
@@ -276,6 +334,19 @@ function NewNovelPage(): React.JSX.Element {
               }
             />
           </label>
+          <label>
+            每批规划章数
+            <input
+              type="number"
+              min={CYCLE_SIZE_MIN}
+              max={CYCLE_SIZE_MAX}
+              step="1"
+              value={form.cycleSize}
+              onChange={(e) =>
+                setForm({ ...form, cycleSize: Number(e.target.value) })
+              }
+            />
+          </label>
         </div>
         <label>
           核心设定
@@ -286,6 +357,107 @@ function NewNovelPage(): React.JSX.Element {
             placeholder="主角是谁？他想要什么？世界有什么独特规则？主要矛盾是什么？"
           />
         </label>
+        <section className="scope-advisor">
+          <button
+            type="button"
+            className="scope-toggle"
+            onClick={() => setAdvisorOpen((value) => !value)}
+          >
+            <Sparkles size={15} />
+            {advisorOpen ? "收起篇幅顾问" : "不知道写多少章？让 Amy 按番茄平台规则建议篇幅与节奏"}
+          </button>
+          {advisorOpen && (
+            <>
+              <p className="scope-hint">
+                平台规则（单章 2000–3000 字、黄金三章、30 章追读考核）已内置，Amy
+                只按你的想法给出总章数、单章字数、分卷骨架与里程碑建议；应用前不会改动任何表单。
+              </p>
+              <label>
+                补充想法（可选）
+                <textarea
+                  rows={2}
+                  value={advisorNotes}
+                  onChange={(e) => setAdvisorNotes(e.target.value)}
+                  placeholder="例如：每天能写 2 小时，想日更一章，先写个 20 万字试试"
+                />
+              </label>
+              <button
+                type="button"
+                className="secondary"
+                disabled={scopeAdviceBusy || form.premise.trim().length < 10}
+                title={
+                  form.premise.trim().length < 10
+                    ? "先填写核心设定（至少 10 字），Amy 才能给出针对性建议"
+                    : undefined
+                }
+                onClick={() => void askAmy()}
+              >
+                {scopeAdviceBusy ? "Amy 正在分析…" : "生成篇幅建议"}
+              </button>
+              {scopeAdviceError && (
+                <div className="error">{scopeAdviceError}</div>
+              )}
+              {scopeAdvice && (
+                <div className="scope-result">
+                  <header>
+                    <b>
+                      {scopeAdvice.recommendation.tierLabel} · 约{" "}
+                      {scopeAdvice.recommendation.totalChapters} 章 ×{" "}
+                      {scopeAdvice.recommendation.chapterWords} 字
+                    </b>
+                    <span>
+                      日更 {scopeAdvice.recommendation.dailyChapters} 章 · 约{" "}
+                      {scopeAdvice.recommendation.estimatedDays} 天完本
+                    </span>
+                    <button
+                      type="button"
+                      className="primary"
+                      onClick={applyAdvice}
+                    >
+                      应用到表单
+                    </button>
+                  </header>
+                  <p>{scopeAdvice.recommendation.reason}</p>
+                  <div className="scope-grid">
+                    <section>
+                      <h4>分卷骨架</h4>
+                      <ul>
+                        {scopeAdvice.volumeSkeleton.map((volume) => (
+                          <li key={volume.title}>
+                            <b>
+                              {volume.title}（第 {volume.startChapter}–
+                              {volume.endChapter} 章）
+                            </b>
+                            <span>{volume.goal}</span>
+                            <small>高潮：{volume.climax}</small>
+                          </li>
+                        ))}
+                      </ul>
+                    </section>
+                    <section>
+                      <h4>关键里程碑</h4>
+                      <ul>
+                        {scopeAdvice.milestones.map((milestone) => (
+                          <li key={milestone.position}>
+                            <b>第 {milestone.position} 章 · {milestone.label}</b>
+                            <span>{milestone.goal}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </section>
+                  </div>
+                  {scopeAdvice.notes.length > 0 && (
+                    <ul className="scope-notes">
+                      {scopeAdvice.notes.map((note) => (
+                        <li key={note}>{note}</li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              )}
+            </>
+          )}
+        </section>
         <div className="form-footer">
           <span>
             预计总字数 <strong>{total.toLocaleString()}</strong>
@@ -300,181 +472,16 @@ function NewNovelPage(): React.JSX.Element {
   );
 }
 
-function NovelPlanPage(): React.JSX.Element {
-  const { novelId = "" } = useParams();
-  const novels = useNovelStore((s) => s.novels);
-  const chaptersByNovel = useNovelStore((s) => s.chapters);
-  const loadChapters = useNovelStore((s) => s.loadChapters);
-  const generateNovelPlan = useNovelStore((s) => s.generateNovelPlan);
-  const [planBusy, setPlanBusy] = useState<PlanPhase | null>(null),
-    [planMessage, setPlanMessage] = useState("");
-  const novel = novels.find((n) => n.id === novelId);
-  const chapters = chaptersByNovel[novelId] ?? [];
-  useEffect(() => {
-    void loadChapters(novelId);
-  }, [loadChapters, novelId]);
-  if (!novel) return <Navigate to="/novels" replace />;
-  async function runPlan(phase: PlanPhase) {
-    setPlanBusy(phase);
-    setPlanMessage("");
-    try {
-      const summary = await generateNovelPlan(novelId, phase);
-      setPlanMessage(
-        phase === "bible"
-          ? `已生成故事圣经 ${summary.sections} 节、设定卡 ${summary.entities} 张，请打开故事圣经审核修改。`
-          : phase === "cast"
-            ? `已生成人物 ${summary.entities} 名（含分层），龙套名称 ${summary.extras} 个并入名称库，请到故事圣经·故事实体审核。`
-            : phase === "scenes"
-              ? `已生成场景卡 ${summary.entities} 张（含视觉锚点），请到故事圣经·故事实体的地点类审核。`
-              : `已生成 ${summary.volumes} 卷、${summary.chapters} 章目录，请到卷章结构审核修改。`,
-      );
-    } catch (error) {
-      setPlanMessage(
-        `规划失败：${error instanceof Error ? error.message : "未知错误"}`,
-      );
-    } finally {
-      setPlanBusy(null);
-    }
-  }
-  return (
-    <main className="workspace">
-      <header className="workspace-head">
-        <div>
-          <span>{novel.genre} · 规划中</span>
-          <h1>{novel.title}</h1>
-        </div>
-        <div className="head-actions">
-          <NavLink className="secondary" to={`/novels/${novelId}/continuity`}>
-            <BookOpen size={16} />
-            正史台账
-          </NavLink>
-          {chapters[0] && (
-            <NavLink
-              className="secondary"
-              to={`/novels/${novelId}/write/${chapters[0].id}`}
-            >
-              <Feather size={16} />
-              开始写作
-            </NavLink>
-          )}
-          <NavLink className="primary" to={`/novels/${novelId}/generate`}>
-            <Play size={16} />
-            批量生成
-          </NavLink>
-        </div>
-      </header>
-      <div className="workspace-grid">
-        <aside className="chapter-tree">
-          <div className="tree-head">
-            <b>章节目录</b>
-            <span>{chapters.length} 章</span>
-          </div>
-          {chapters.slice(0, 40).map((ch) => (
-            <NavLink key={ch.id} to={`/novels/${novelId}/write/${ch.id}`}>
-              <span>{ch.position}</span>
-              <div>
-                <b>{ch.title}</b>
-                <small>{ch.outline || "等待生成章纲"}</small>
-              </div>
-            </NavLink>
-          ))}
-          {chapters.length > 40 && (
-            <p className="more">还有 {chapters.length - 40} 章</p>
-          )}
-        </aside>
-        <section className="planning-canvas">
-          <span className="kicker">STORY BLUEPRINT</span>
-          <h2>让大故事先有骨架</h2>
-          <p>{novel.premise || "还没有核心设定，可以先补充创作意图。"}</p>
-          <div className="plan-actions">
-            <button
-              className="primary"
-              disabled={planBusy !== null}
-              onClick={() => void runPlan("bible")}
-            >
-              <Sparkles size={16} />
-              {planBusy === "bible" ? "正在生成圣经…" : "AI 生成故事圣经与角色"}
-            </button>
-            <button
-              className="secondary"
-              disabled={planBusy !== null}
-              onClick={() => void runPlan("cast")}
-            >
-              <Users size={16} />
-              {planBusy === "cast" ? "正在设计人物…" : "AI 人物分层与名称库"}
-            </button>
-            <button
-              className="secondary"
-              disabled={planBusy !== null}
-              onClick={() => void runPlan("scenes")}
-            >
-              <Map size={16} />
-              {planBusy === "scenes" ? "正在设计场景…" : "AI 场景库（可复用）"}
-            </button>
-            <button
-              className="secondary"
-              disabled={planBusy !== null}
-              onClick={() => void runPlan("structure")}
-            >
-              <Layers size={16} />
-              {planBusy === "structure"
-                ? "正在规划卷章…"
-                : "AI 生成分卷与章节大纲"}
-            </button>
-          </div>
-          {planMessage && <div className="model-result">{planMessage}</div>}
-          <div className="blueprint-grid">
-            <article>
-              <b>故事圣经</b>
-              <span>世界规则、角色、地点与创作边界</span>
-              <NavLink to={`/novels/${novelId}/bible`}>打开故事圣经</NavLink>
-            </article>
-            <article>
-              <b>分卷规划</b>
-              <span>把 {novel.targetChapters} 章拆成阶段目标和转折</span>
-              <NavLink to={`/novels/${novelId}/structure`}>
-                编辑卷章场景
-              </NavLink>
-            </article>
-            <article>
-              <b>章节目录</b>
-              <span>已创建 {chapters.length} 个章节槽位，可增删和排序</span>
-              <NavLink to={`/novels/${novelId}/structure`}>
-                管理章节目录
-              </NavLink>
-            </article>
-            <article>
-              <b>批量正文</b>
-              <span>指定范围，按章生成，可暂停续跑</span>
-              <NavLink to={`/novels/${novelId}/generate`}>配置任务</NavLink>
-            </article>
-          </div>
-        </section>
-        <aside className="amy-panel">
-          <div className="amy-avatar">
-            <Sparkles />
-          </div>
-          <h3>Amy 创作助手</h3>
-          <p>我会使用故事圣经、当前大纲、最近章节和正史事实来准备每一章。</p>
-          <div className="context-box">
-            <b>当前上下文</b>
-            <span>核心设定</span>
-            <span>{chapters.length} 个章节槽位</span>
-            <span>目标 {novel.targetWords.toLocaleString()} 字</span>
-          </div>
-          <textarea rows={5} placeholder="告诉 Amy 你想调整的故事方向…" />
-          <button className="primary">发送</button>
-        </aside>
-      </div>
-    </main>
-  );
-}
-
 function GeneratePage(): React.JSX.Element {
   const { novelId = "" } = useParams();
   const navigate = useNavigate();
   const novel = useNovelStore((s) => s.novels.find((n) => n.id === novelId));
   const createDraft = useNovelStore((s) => s.createGenerationDraft);
+  const workflow = useNovelStore((s) => s.planningWorkflows[novelId]);
+  const loadPlanningWorkflow = useNovelStore((s) => s.loadPlanningWorkflow);
+  const cycles = useNovelStore((s) => s.planningCycles[novelId] ?? []);
+  const loadPlanningCycles = useNovelStore((s) => s.loadPlanningCycles);
+  const [submitError, setSubmitError] = useState("");
   const [policy, setPolicy] = useState<GenerationPolicy>({
     startChapter: 1,
     endChapter: Math.min(10, novel?.targetChapters ?? 10),
@@ -487,12 +494,41 @@ function GeneratePage(): React.JSX.Element {
     deepThinking: false,
   });
   const estimate = useMemo(() => estimateGeneration(policy), [policy]);
+  useEffect(() => {
+    if (novelId)
+      void Promise.all([
+        loadPlanningWorkflow(novelId),
+        loadPlanningCycles(novelId),
+      ]);
+  }, [loadPlanningCycles, loadPlanningWorkflow, novelId]);
+  const readyCycle = cycles.find((item) =>
+    ["ready", "generating"].includes(item.status),
+  );
+  useEffect(() => {
+    if (!readyCycle) return;
+    setPolicy((current) => ({
+      ...current,
+      startChapter: readyCycle.startChapter,
+      endChapter: readyCycle.endChapter,
+    }));
+  }, [readyCycle?.id]);
   if (!novel) return <Navigate to="/novels" replace />;
-  const error = validateChapterRange(policy, novel.targetChapters);
+  const error = !workflow?.confirmedSteps.includes(9)
+    ? "请先完成小说框架向导和一致性检查"
+    : !readyCycle ||
+        readyCycle.startChapter !== policy.startChapter ||
+        readyCycle.endChapter !== policy.endChapter
+      ? "生成范围必须与已通过审核的当前批次策划包一致"
+    : validateChapterRange(policy, novel.targetChapters);
   async function start() {
     if (error) return;
-    const result = await createDraft(novelId, policy);
-    navigate(`/batches?created=${result.id}`);
+    setSubmitError("");
+    try {
+      const result = await createDraft(novelId, policy);
+      navigate(`/batches?created=${result.id}`);
+    } catch (reason) {
+      setSubmitError(reason instanceof Error ? reason.message : "任务创建失败");
+    }
   }
   return (
     <main className="page narrow">
@@ -501,8 +537,8 @@ function GeneratePage(): React.JSX.Element {
       </div>
       <h1>配置批量生成任务</h1>
       <p className="lead">
-        任务按章节顺序执行，可设置并发加速。支持暂停、恢复与失败重试，不会因一次
-        Token 不足丢失整批结果。
+        任务按章节顺序串行执行，后章会读取本批次前章候选稿。支持暂停、恢复、限流退避
+        与硬 Token 预算，不会因一次失败丢失整批结果。
       </p>
       <section className="form-card">
         <div className="form-row">
@@ -585,25 +621,6 @@ function GeneratePage(): React.JSX.Element {
         </label>
         <div className="form-row">
           <label>
-            并发章节数
-            <input
-              type="number"
-              min={1}
-              max={3}
-              value={policy.concurrency ?? 1}
-              onChange={(e) =>
-                setPolicy({
-                  ...policy,
-                  concurrency: Math.min(
-                    3,
-                    Math.max(1, Number(e.target.value) || 1),
-                  ),
-                })
-              }
-            />
-            <small>1–3 章并行生成（候选稿模式安全）。</small>
-          </label>
-          <label>
             审稿模式
             <select
               value={policy.approvalMode}
@@ -621,7 +638,9 @@ function GeneratePage(): React.JSX.Element {
             <small>AI 审查会额外调用一次模型检查一致性问题。</small>
           </label>
         </div>
-        {error && <div className="error">{error}</div>}
+        {(error || submitError) && (
+          <div className="error">{submitError || error}</div>
+        )}
         <div className="estimate">
           <div>
             <span>章节数</span>
@@ -737,7 +756,10 @@ export default function App(): React.JSX.Element {
           <Route path="/" element={<HomePage />} />
           <Route path="/novels" element={<NovelsPage />} />
           <Route path="/novels/new" element={<NewNovelPage />} />
-          <Route path="/novels/:novelId/plan" element={<NovelPlanPage />} />
+          <Route
+            path="/novels/:novelId/plan"
+            element={<PlanningWorkflowPage />}
+          />
           <Route
             path="/novels/:novelId/write/:chapterId?"
             element={<WriterPage />}

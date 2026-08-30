@@ -56,6 +56,7 @@ function characterStateFrom(row: DbRow): CharacterState {
     knowledge: parseJson<string[]>(row.knowledge_json, []),
     goals: parseJson<string[]>(row.goals_json, []),
     inventory: parseJson<string[]>(row.inventory_json, []),
+    skills: parseJson<string[]>(row.skills_json, []),
     source: row.source as CharacterState["source"],
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
@@ -171,7 +172,7 @@ export function createContinuityRepository(client: Client) {
     const now = new Date().toISOString(),
       id = input.id ?? nanoid();
     await client.execute({
-      sql: `INSERT INTO character_states VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET chapter_id=excluded.chapter_id,summary=excluded.summary,location=excluded.location,physical=excluded.physical,emotional=excluded.emotional,knowledge_json=excluded.knowledge_json,goals_json=excluded.goals_json,inventory_json=excluded.inventory_json,source=excluded.source,updated_at=excluded.updated_at`,
+      sql: `INSERT INTO character_states (id,novel_id,character_id,chapter_id,summary,location,physical,emotional,knowledge_json,goals_json,inventory_json,skills_json,source,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET chapter_id=excluded.chapter_id,summary=excluded.summary,location=excluded.location,physical=excluded.physical,emotional=excluded.emotional,knowledge_json=excluded.knowledge_json,goals_json=excluded.goals_json,inventory_json=excluded.inventory_json,skills_json=excluded.skills_json,source=excluded.source,updated_at=excluded.updated_at`,
       args: [
         id,
         input.novelId,
@@ -184,6 +185,7 @@ export function createContinuityRepository(client: Client) {
         JSON.stringify(normalizeStateList(input.knowledge)),
         JSON.stringify(normalizeStateList(input.goals)),
         JSON.stringify(normalizeStateList(input.inventory)),
+        JSON.stringify(normalizeStateList(input.skills)),
         input.source ?? "manual",
         now,
         now,

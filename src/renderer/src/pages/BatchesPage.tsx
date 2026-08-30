@@ -266,7 +266,15 @@ function CandidateCard({
                     <button onClick={() => review(proposal.id, false)}>
                       拒绝
                     </button>
-                    <button onClick={() => review(proposal.id, true)}>
+                    <button
+                      disabled={item.status !== "accepted"}
+                      title={
+                        item.status === "accepted"
+                          ? "写入正史"
+                          : "请先接受候选稿"
+                      }
+                      onClick={() => review(proposal.id, true)}
+                    >
                       接受并写入正史
                     </button>
                   </>

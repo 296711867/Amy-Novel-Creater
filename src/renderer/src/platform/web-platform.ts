@@ -3,6 +3,7 @@ import {
   buildInitialChapters,
   calculateTargetWords,
   countCjkWords,
+  normalizeCycleSize,
   type Chapter,
   type ChapterVersion,
   type CreateNovelInput,
@@ -17,10 +18,24 @@ import type {
 } from "@domain/story-structure";
 import type { ContextPack } from "@domain/context-pack";
 import type { SaveUsageInput, UsageRecord } from "@domain/usage";
-import type {
-  ModelProfile,
-  SaveModelProfileInput,
+import {
+  chatCompletionsRequestBody,
+  ModelRequestError,
+  normalizeChatCompletionsUrl,
+  parseRetryAfterMs,
+  type ModelProfile,
+  type SaveModelProfileInput,
 } from "@domain/model-profile";
+import {
+  parseScopeAdvice,
+  scopeAdvisoryMaxOutputTokens,
+  scopeAdvisoryPrompt,
+} from "@domain/scope-advisor";
+import {
+  briefDraftingMaxOutputTokens,
+  briefDraftingPrompt,
+  parseBriefDraft,
+} from "@domain/brief-drafting";
 import type {
   ChapterCandidate,
   GenerateChapterInput,
@@ -29,21 +44,15 @@ import type {
 import type { FactProposal, StoredFinding } from "@domain/quality-check";
 import { estimateTokens } from "@domain/context-pack";
 import {
-  biblePlanningPrompt,
-  castPlanningPrompt,
-  parseBiblePlan,
-  parseCastPlan,
-  parseScenePlan,
-  parseStructurePlan,
-  scenePlanningPrompt,
-  structurePlanningPrompt,
+  novelPlanningPrompt,
+  planningMaxOutputTokens,
 } from "@domain/planning";
 import {
   defaultNamePool,
   namePoolText,
   type NamePool,
 } from "@domain/name-pool";
-import type { PlanPhase } from "@domain/planning";
+import type { PlanPhase, PlanRange } from "@domain/planning";
 import {
   estimateGeneration,
   type GenerationBatch,
@@ -71,6 +80,27 @@ import {
   type TimelineEvent,
 } from "@domain/continuity";
 import type { NovelProjectBundle } from "@domain/project-export";
+import { applyNovelPlan } from "@application/apply-novel-plan";
+import {
+  defaultPlanningWorkflow,
+  assertPlanningReady,
+  normalizePlanningWorkflow,
+  type PlanningWorkflow,
+} from "@domain/planning-workflow";
+import {
+  planningPromptHash,
+  type PlanningRun,
+} from "@domain/planning-run";
+import type {
+  PlanningCycle,
+  SavePlanningCycleInput,
+} from "@domain/planning-cycle";
+import type {
+  NewPlanningProposal,
+  PlanningProposal,
+  PlanningProposalStatus,
+} from "@domain/planning-proposal";
+import { reviewPlanningProposal } from "@application/review-planning-proposal";
 
 const NOVELS_KEY = "amy-novel:novels";
 const chaptersKey = (novelId: string): string =>
@@ -99,6 +129,14 @@ const proposalsKey = (candidateId: string) =>
   `amy-novel:proposals:${candidateId}`;
 const BATCHES_KEY = "amy-novel:generation-batches";
 const jobsKey = (id: string) => `amy-novel:generation-jobs:${id}`;
+const workflowKey = (novelId: string) =>
+  `amy-novel:planning-workflow:${novelId}`;
+const planningRunsKey = (novelId: string) =>
+  `amy-novel:planning-runs:${novelId}`;
+const planningCyclesKey = (novelId: string) =>
+  `amy-novel:planning-cycles:${novelId}`;
+const planningPlanProposalsKey = (novelId: string) =>
+  `amy-novel:planning-proposals:${novelId}`;
 
 function read<T>(key: string, fallback: T): T {
   try {
@@ -113,6 +151,56 @@ function write<T>(key: string, value: T): void {
   localStorage.setItem(key, JSON.stringify(value));
 }
 
+/** 旧版本 localStorage 中的作品没有 cycleSize，读取时统一归一化。 */
+function readNovels(): Novel[] {
+  return read<Novel[]>(NOVELS_KEY, []).map((item) => ({
+    ...item,
+    cycleSize: normalizeCycleSize(item.cycleSize),
+  }));
+}
+
+function replaceWebPlanningProposals(
+  novelId: string,
+  cycleId: string,
+  startChapter: number,
+  endChapter: number,
+  proposals: NewPlanningProposal[],
+): PlanningProposal[] {
+  const now = new Date().toISOString(),
+    kept = read<PlanningProposal[]>(planningPlanProposalsKey(novelId), []).filter(
+      (item) =>
+        item.status !== "pending" ||
+        item.startChapter !== startChapter ||
+        item.endChapter !== endChapter,
+    ),
+    created = proposals.map((item) => ({
+      ...item,
+      id: nanoid(),
+      novelId,
+      cycleId,
+      startChapter,
+      endChapter,
+      status: "pending" as const,
+      createdAt: now,
+      updatedAt: now,
+    }));
+  write(planningPlanProposalsKey(novelId), [...kept, ...created]);
+  return created;
+}
+
+function updateWebPlanningProposalStatus(
+  novelId: string,
+  id: string,
+  status: PlanningProposalStatus,
+): PlanningProposal {
+  const list = read<PlanningProposal[]>(planningPlanProposalsKey(novelId), []),
+    index = list.findIndex((item) => item.id === id);
+  if (index < 0) throw new Error("策划提案不存在");
+  list[index] = { ...list[index], status, updatedAt: new Date().toISOString() };
+  write(planningPlanProposalsKey(novelId), list);
+  return list[index];
+}
+
 export const webPlatform: PlatformPort = {
   host: "web",
   async getDiagnostics() {
@@ -123,8 +211,82 @@ export const webPlatform: PlatformPort = {
       platform: navigator.platform,
       runtime: { browser: navigator.userAgent },
       database: "ok",
-      novelCount: read<Novel[]>(NOVELS_KEY, []).length,
+      novelCount: readNovels().length,
     };
+  },
+  async suggestNovelScope(input: {
+    title: string;
+    genre: string;
+    premise: string;
+    notes?: string;
+  }) {
+    const profile = read<ModelProfile[]>(PROFILES_KEY, []).find(
+      (item) => item.isDefault,
+    );
+    if (!profile) throw new Error("请先在设置页配置默认写作模型");
+    const key = sessionStorage.getItem(`amy-novel:secret:${profile.id}`) ?? "";
+    const prompt = scopeAdvisoryPrompt(input);
+    const response = await fetch(
+      normalizeChatCompletionsUrl(profile.baseUrl),
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          ...(key ? { authorization: `Bearer ${key}` } : {}),
+        },
+        body: JSON.stringify(
+          chatCompletionsRequestBody(profile, prompt, {
+            maxOutputTokens: scopeAdvisoryMaxOutputTokens(),
+            temperature: 0.5,
+            stream: false,
+            thinking: "disabled",
+          }),
+        ),
+      },
+    );
+    if (!response.ok)
+      throw new Error(`模型请求失败（HTTP ${response.status}）`);
+    const data = (await response.json()) as {
+      choices?: Array<{ message?: { content?: string } }>;
+    };
+    return parseScopeAdvice(data.choices?.[0]?.message?.content ?? "");
+  },
+  async suggestPlanningBrief(input: {
+    title: string;
+    genre: string;
+    premise: string;
+    notes?: string;
+  }) {
+    const profile = read<ModelProfile[]>(PROFILES_KEY, []).find(
+      (item) => item.isDefault,
+    );
+    if (!profile) throw new Error("请先在设置页配置默认写作模型");
+    const key = sessionStorage.getItem(`amy-novel:secret:${profile.id}`) ?? "";
+    const prompt = briefDraftingPrompt(input);
+    const response = await fetch(
+      normalizeChatCompletionsUrl(profile.baseUrl),
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          ...(key ? { authorization: `Bearer ${key}` } : {}),
+        },
+        body: JSON.stringify(
+          chatCompletionsRequestBody(profile, prompt, {
+            maxOutputTokens: briefDraftingMaxOutputTokens(),
+            temperature: 0.7,
+            stream: false,
+            thinking: "disabled",
+          }),
+        ),
+      },
+    );
+    if (!response.ok)
+      throw new Error(`模型请求失败（HTTP ${response.status}）`);
+    const data = (await response.json()) as {
+      choices?: Array<{ message?: { content?: string } }>;
+    };
+    return parseBriefDraft(data.choices?.[0]?.message?.content ?? "");
   },
   async importNovelProject(bundle: NovelProjectBundle) {
     const id = nanoid(),
@@ -133,6 +295,7 @@ export const webPlatform: PlatformPort = {
         ...bundle.novel,
         id,
         title: `${bundle.novel.title}（恢复）`,
+        cycleSize: normalizeCycleSize(bundle.novel.cycleSize),
         createdAt: now,
         updatedAt: now,
       },
@@ -144,7 +307,7 @@ export const webPlatform: PlatformPort = {
       ),
       volumeIds = new Map(bundle.volumes.map((item) => [item.id, nanoid()])),
       entityIds = new Map(bundle.entities.map((item) => [item.id, nanoid()]));
-    write(NOVELS_KEY, [novel, ...read<Novel[]>(NOVELS_KEY, [])]);
+    write(NOVELS_KEY, [novel, ...readNovels()]);
     const chapters = bundle.chapters.map((item) => ({
       ...item,
       id: chapterIds.get(item.id)!,
@@ -267,10 +430,93 @@ export const webPlatform: PlatformPort = {
       })),
       ...read<UsageRecord[]>(USAGE_KEY, []),
     ]);
+    write(
+      workflowKey(id),
+      bundle.workflow
+        ? normalizePlanningWorkflow({ ...bundle.workflow, novelId: id })
+        : defaultPlanningWorkflow(id),
+    );
+    const cycleIds = new Map(
+      (bundle.planningCycles ?? []).map((item) => [item.id, nanoid()]),
+    );
+    write(
+      planningRunsKey(id),
+      (bundle.planningRuns ?? []).map((item) => ({
+        ...item,
+        id: nanoid(),
+        novelId: id,
+      })),
+    );
+    write(
+      planningCyclesKey(id),
+      (bundle.planningCycles ?? []).map((item) => ({
+        ...item,
+        id: cycleIds.get(item.id)!,
+        novelId: id,
+      })),
+    );
+    write(
+      planningPlanProposalsKey(id),
+      (bundle.planningProposals ?? []).flatMap((item) =>
+        cycleIds.has(item.cycleId)
+          ? [{
+              ...item,
+              id: nanoid(),
+              novelId: id,
+              cycleId: cycleIds.get(item.cycleId)!,
+            }]
+          : [],
+      ),
+    );
     return novel;
   },
   async listNovels() {
-    return read<Novel[]>(NOVELS_KEY, []);
+    return readNovels();
+  },
+  async deleteNovel(id: string) {
+    const chapters = read<Chapter[]>(chaptersKey(id), []),
+      candidates = chapters.flatMap((chapter) =>
+        read<ChapterCandidate[]>(candidatesKey(chapter.id), []),
+      ),
+      batches = read<GenerationBatch[]>(BATCHES_KEY, []);
+    for (const candidate of candidates) {
+      localStorage.removeItem(findingsKey(candidate.id));
+      localStorage.removeItem(proposalsKey(candidate.id));
+    }
+    for (const chapter of chapters) {
+      localStorage.removeItem(versionsKey(chapter.id));
+      localStorage.removeItem(candidatesKey(chapter.id));
+    }
+    for (const batch of batches.filter((item) => item.novelId === id))
+      localStorage.removeItem(jobsKey(batch.id));
+    [
+      chaptersKey(id),
+      bibleKey(id),
+      entitiesKey(id),
+      timelineKey(id),
+      foreshadowKey(id),
+      characterStatesKey(id),
+      volumesKey(id),
+      scenesKey(id),
+      contextKey(id),
+      workflowKey(id),
+      planningRunsKey(id),
+      planningCyclesKey(id),
+      planningPlanProposalsKey(id),
+      `amy-novel:name-pool:${id}`,
+    ].forEach((key) => localStorage.removeItem(key));
+    write(
+      NOVELS_KEY,
+      readNovels().filter((item) => item.id !== id),
+    );
+    write(
+      USAGE_KEY,
+      read<UsageRecord[]>(USAGE_KEY, []).filter((item) => item.novelId !== id),
+    );
+    write(
+      BATCHES_KEY,
+      batches.filter((item) => item.novelId !== id),
+    );
   },
   async createNovel(input: CreateNovelInput) {
     const now = new Date().toISOString();
@@ -279,11 +525,12 @@ export const webPlatform: PlatformPort = {
       ...input,
       premise: input.premise.trim(),
       targetWords: calculateTargetWords(input),
+      cycleSize: normalizeCycleSize(input.cycleSize),
       status: "planning",
       createdAt: now,
       updatedAt: now,
     };
-    const novels = read<Novel[]>(NOVELS_KEY, []);
+    const novels = readNovels();
     const chapters = buildInitialChapters(
       novel.id,
       novel.targetChapters,
@@ -293,8 +540,40 @@ export const webPlatform: PlatformPort = {
     write(chaptersKey(novel.id), chapters);
     return { novel, chapters };
   },
-  async generateNovelPlan(novelId: string, phase: PlanPhase) {
-    const novel = read<Novel[]>(NOVELS_KEY, []).find(
+  async updateNovelSettings(
+    novelId: string,
+    patch: { cycleSize: number },
+  ): Promise<Novel> {
+    const novels = readNovels();
+    const novel = novels.find((item) => item.id === novelId);
+    if (!novel) throw new Error("作品不存在");
+    const updated: Novel = {
+      ...novel,
+      cycleSize: normalizeCycleSize(patch.cycleSize),
+      updatedAt: new Date().toISOString(),
+    };
+    write(NOVELS_KEY, novels.map((item) => (item.id === novelId ? updated : item)));
+    return updated;
+  },
+  async getPlanningWorkflow(novelId: string) {
+    return normalizePlanningWorkflow(
+      read<PlanningWorkflow>(
+        workflowKey(novelId),
+        defaultPlanningWorkflow(novelId),
+      ),
+    );
+  },
+  async savePlanningWorkflow(workflow: PlanningWorkflow) {
+    const value = normalizePlanningWorkflow(workflow);
+    write(workflowKey(value.novelId), value);
+    return value;
+  },
+  async generateNovelPlan(
+    novelId: string,
+    phase: PlanPhase,
+    range?: PlanRange,
+  ) {
+    const novel = readNovels().find(
       (item) => item.id === novelId,
     );
     if (!novel) throw new Error("作品不存在");
@@ -304,200 +583,199 @@ export const webPlatform: PlatformPort = {
     if (!profile) throw new Error("请先在设置页配置默认写作模型");
     const key = sessionStorage.getItem(`amy-novel:secret:${profile.id}`) ?? "";
     const bible = await this.listBibleSections(novelId);
+    const workflow = await this.getPlanningWorkflow(novelId);
     const entities = await this.listStoryEntities(novelId);
+    const chapters = await this.listChapters(novelId);
     const poolKey = `amy-novel:name-pool:${novelId}`,
       namePool = read<NamePool>(poolKey, defaultNamePool(novelId, novel.genre));
-    const prompt =
-      phase === "bible"
-        ? biblePlanningPrompt(novel)
-        : phase === "structure"
-          ? structurePlanningPrompt(novel, bible)
-          : phase === "cast"
-            ? castPlanningPrompt(
-                novel,
-                bible,
-                entities.filter((item) => item.type === "character"),
-                namePoolText(namePool),
-              )
-            : scenePlanningPrompt(
-                novel,
-                bible,
-                entities.filter((item) => item.type === "location"),
-              );
-    // 浏览器直连模型受 CORS 限制，多数 provider 需要代理才能使用。
-    const response = await fetch(
-      `${profile.baseUrl.replace(/\/$/, "")}/chat/completions`,
-      {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          ...(key ? { authorization: `Bearer ${key}` } : {}),
-        },
-        body: JSON.stringify({
-          model: profile.modelId,
-          messages: [{ role: "user", content: prompt }],
-          max_tokens:
-            phase === "bible" ? 8000 : phase === "structure" ? 24000 : 12000,
-          temperature: 0.7,
-          thinking: { type: "disabled" },
-        }),
-      },
-    );
-    if (!response.ok)
-      throw new Error(`模型请求失败（HTTP ${response.status}）`);
-    const data = (await response.json()) as {
-      choices?: Array<{ message?: { content?: string } }>;
-    };
-    const content = data.choices?.[0]?.message?.content ?? "";
-    if (phase === "bible") {
-      const plan = parseBiblePlan(content);
-      for (const section of plan.sections)
-        await this.saveBibleSection({
-          novelId,
-          kind: section.kind,
-          content: section.content,
-        });
-      for (const item of [...plan.characters, ...plan.entities])
-        await this.saveStoryEntity({
-          novelId,
-          type: item.type,
-          name: item.name,
-          summary: item.summary,
-          aliases: item.aliases,
-          profile: item.profile,
-        });
-      return {
-        phase,
-        sections: plan.sections.length,
-        entities: plan.characters.length + plan.entities.length,
-        volumes: 0,
-        chapters: 0,
-        extras: 0,
-      };
-    }
-    if (phase === "cast") {
-      const plan = parseCastPlan(content),
-        byName = new Map(
-          entities
-            .filter((item) => item.type === "character")
-            .map((item) => [item.name, item]),
-        );
-      for (const character of plan.characters) {
-        const existing = byName.get(character.name);
-        await this.saveStoryEntity({
-          id: existing?.id,
-          novelId,
-          type: "character",
-          name: character.name,
-          summary: character.summary,
-          aliases: character.aliases,
-          profile: {
-            ...(existing?.profile ?? {}),
-            ...character.profile,
-            tier: character.tier,
-          },
-        });
-      }
-      write(poolKey, {
-        ...namePool,
-        usedNames: [...new Set([...namePool.usedNames, ...plan.extras])],
-      });
-      return {
-        phase,
-        sections: 0,
-        entities: plan.characters.length,
-        volumes: 0,
-        chapters: 0,
-        extras: plan.extras.length,
-      };
-    }
-    if (phase === "scenes") {
-      const plan = parseScenePlan(content),
-        byName = new Map(
-          entities
-            .filter((item) => item.type === "location")
-            .map((item) => [item.name, item]),
-        );
-      for (const scene of plan.scenes) {
-        const existing = byName.get(scene.name);
-        await this.saveStoryEntity({
-          id: existing?.id,
-          novelId,
-          type: "location",
-          name: scene.name,
-          summary: scene.summary,
-          aliases: scene.aliases,
-          profile: {
-            ...(existing?.profile ?? {}),
-            purpose: scene.purpose,
-            mood: scene.mood,
-            visualAnchors: scene.visualAnchors.join("、"),
-            residents: scene.residents,
-            dangerLevel: scene.dangerLevel,
-          },
-        });
-      }
-      return {
-        phase,
-        sections: 0,
-        entities: plan.scenes.length,
-        volumes: 0,
-        chapters: 0,
-        extras: 0,
-      };
-    }
-    const plan = parseStructurePlan(content),
-      structure = await this.listStoryStructure(novelId),
-      chapters = await this.listChapters(novelId),
-      volumeIds = new Map<string, string>();
-    for (const volume of plan.volumes) {
-      const existing = structure.volumes.find(
-        (item) => item.title === volume.title,
-      );
-      const saved = await this.saveVolume(
-        existing
-          ? {
-              id: existing.id,
-              novelId,
-              title: existing.title,
-              outline: volume.outline,
-            }
-          : { novelId, title: volume.title, outline: volume.outline },
-      );
-      volumeIds.set(volume.title, saved.id);
-    }
-    const defaultVolumeId = plan.volumes[0]
-      ? (volumeIds.get(plan.volumes[0].title) ?? null)
-      : null;
-    for (const [index, chapter] of plan.chapters.entries()) {
-      const volumeId = chapter.volumeTitle
-        ? (volumeIds.get(chapter.volumeTitle) ?? defaultVolumeId)
-        : defaultVolumeId;
-      const slot = chapters.find((item) => item.position === index + 1);
-      const target =
-        slot ??
-        (await this.createChapter({
-          novelId,
-          volumeId,
-          title: chapter.title,
-          targetWords: novel.chapterWords,
-        }));
-      await this.updateChapterPlan({
-        chapterId: target.id,
-        volumeId,
-        title: chapter.title,
-        outline: chapter.outline,
-        targetWords: novel.chapterWords,
-      });
-    }
-    return {
+    const prompt = novelPlanningPrompt({
       phase,
-      sections: 0,
-      entities: 0,
-      volumes: plan.volumes.length,
-      chapters: plan.chapters.length,
-      extras: 0,
+      novel,
+      bible,
+      brief: workflow.brief,
+      entities,
+      chapters,
+      range,
+      namePoolText: namePoolText(namePool),
+    });
+    const now = new Date().toISOString(),
+      run: PlanningRun = {
+        id: nanoid(),
+        novelId,
+        phase,
+        startChapter: range?.startChapter ?? null,
+        endChapter: range?.endChapter ?? null,
+        profileId: profile.id,
+        provider: profile.provider,
+        model: profile.modelId,
+        promptHash: planningPromptHash(prompt),
+        rawResponse: "",
+        inputTokens: 0,
+        outputTokens: 0,
+        cachedTokens: 0,
+        status: "running",
+        error: "",
+        createdAt: now,
+        updatedAt: now,
+      };
+    const saveRun = (next: PlanningRun) => {
+      const list = read<PlanningRun[]>(planningRunsKey(novelId), []);
+      write(planningRunsKey(novelId), [
+        next,
+        ...list.filter((item) => item.id !== next.id),
+      ]);
     };
+    saveRun(run);
+    try {
+      // 浏览器直连模型受 CORS 限制，多数 provider 需要代理才能使用。
+      const response = await fetch(
+        normalizeChatCompletionsUrl(profile.baseUrl),
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            ...(key ? { authorization: `Bearer ${key}` } : {}),
+          },
+          body: JSON.stringify(
+            chatCompletionsRequestBody(profile, prompt, {
+              maxOutputTokens: planningMaxOutputTokens(phase),
+              temperature: 0.7,
+              stream: false,
+              thinking: "disabled",
+            }),
+          ),
+        },
+      );
+      if (!response.ok)
+        throw new Error(`模型请求失败（HTTP ${response.status}）`);
+      const data = (await response.json()) as {
+        choices?: Array<{ message?: { content?: string } }>;
+        usage?: {
+          prompt_tokens?: number;
+          completion_tokens?: number;
+          prompt_tokens_details?: { cached_tokens?: number };
+        };
+      };
+      const content = data.choices?.[0]?.message?.content ?? "",
+        inputTokens = data.usage?.prompt_tokens ?? estimateTokens(prompt),
+        outputTokens = data.usage?.completion_tokens ?? estimateTokens(content),
+        received: PlanningRun = {
+          ...run,
+          rawResponse: content,
+          inputTokens,
+          outputTokens,
+          cachedTokens: data.usage?.prompt_tokens_details?.cached_tokens ?? 0,
+          status: "received",
+          updatedAt: new Date().toISOString(),
+        };
+      // 原始响应先保存，解析失败时仍可检查和重新解析。
+      saveRun(received);
+      await this.saveUsage({
+        novelId,
+        chapterId: null,
+        operation: "planning",
+        provider: profile.provider,
+        model: profile.modelId,
+        inputTokens,
+        outputTokens,
+        cachedTokens: received.cachedTokens,
+        cost: null,
+        measurement: data.usage ? "provider" : "estimated",
+      });
+      const summary = await applyNovelPlan({
+        novel,
+        phase,
+        content,
+        entities,
+        namePool,
+        range,
+        store: {
+          saveBibleSection: (input) => this.saveBibleSection(input),
+          saveStoryEntity: (input) => this.saveStoryEntity(input),
+          saveNamePool: async (pool) => (write(poolKey, pool), pool),
+          listStoryStructure: (id) => this.listStoryStructure(id),
+          listChapters: (id) => this.listChapters(id),
+          saveVolume: (input) => this.saveVolume(input),
+          reorderVolumes: (id, ids) => this.reorderVolumes(id, ids),
+          updateChapterPlan: (input) => this.updateChapterPlan(input),
+          createChapter: (input) => this.createChapter(input),
+          savePlanningCycle: (input) => this.savePlanningCycle(input),
+          replacePlanningProposals: (id, cycleId, start, end, proposals) =>
+            Promise.resolve(
+              replaceWebPlanningProposals(
+                id,
+                cycleId,
+                start,
+                end,
+                proposals,
+              ),
+            ),
+        },
+      });
+      saveRun({
+        ...received,
+        status: "completed",
+        updatedAt: new Date().toISOString(),
+      });
+      return summary;
+    } catch (error) {
+      const current = read<PlanningRun[]>(planningRunsKey(novelId), []).find(
+        (item) => item.id === run.id,
+      );
+      saveRun({
+        ...(current ?? run),
+        status: "failed",
+        error: error instanceof Error ? error.message : "规划生成失败",
+        updatedAt: new Date().toISOString(),
+      });
+      throw error;
+    }
+  },
+  async listPlanningRuns(novelId: string) {
+    return read<PlanningRun[]>(planningRunsKey(novelId), []);
+  },
+  async listPlanningCycles(novelId: string) {
+    return read<PlanningCycle[]>(planningCyclesKey(novelId), []);
+  },
+  async savePlanningCycle(input: SavePlanningCycleInput) {
+    const list = read<PlanningCycle[]>(planningCyclesKey(input.novelId), []),
+      existing = input.id
+        ? list.find((item) => item.id === input.id)
+        : list.find(
+            (item) =>
+              item.startChapter === input.startChapter &&
+              item.endChapter === input.endChapter &&
+              item.status !== "superseded",
+          ),
+      now = new Date().toISOString(),
+      cycle: PlanningCycle = {
+        ...input,
+        id: existing?.id ?? nanoid(),
+        createdAt: existing?.createdAt ?? now,
+        updatedAt: now,
+      };
+    write(planningCyclesKey(input.novelId), [
+      ...list.filter((item) => item.id !== cycle.id),
+      cycle,
+    ]);
+    return cycle;
+  },
+  async listPlanningProposals(novelId: string) {
+    return read<PlanningProposal[]>(planningPlanProposalsKey(novelId), []);
+  },
+  async reviewPlanningProposal(novelId, proposalId, status) {
+    return reviewPlanningProposal(
+      {
+        listPlanningProposals: (id) => this.listPlanningProposals(id),
+        updatePlanningProposalStatus: (id, next) =>
+          Promise.resolve(updateWebPlanningProposalStatus(novelId, id, next)),
+        listStoryEntities: (id) => this.listStoryEntities(id),
+        saveStoryEntity: (input) => this.saveStoryEntity(input),
+      },
+      novelId,
+      proposalId,
+      status,
+    );
   },
   async listChapters(novelId: string) {
     return read<Chapter[]>(chaptersKey(novelId), []).map((chapter) => ({
@@ -509,7 +787,7 @@ export const webPlatform: PlatformPort = {
     }));
   },
   async getChapter(chapterId: string) {
-    const novels = read<Novel[]>(NOVELS_KEY, []);
+    const novels = readNovels();
     for (const novel of novels) {
       const chapter = (await this.listChapters(novel.id)).find(
         (item) => item.id === chapterId,
@@ -519,7 +797,7 @@ export const webPlatform: PlatformPort = {
     return null;
   },
   async saveChapter(input: SaveChapterInput) {
-    const novels = read<Novel[]>(NOVELS_KEY, []);
+    const novels = readNovels();
     for (const novel of novels) {
       const chapters = await this.listChapters(novel.id);
       const index = chapters.findIndex((item) => item.id === input.chapterId);
@@ -565,7 +843,7 @@ export const webPlatform: PlatformPort = {
     return chapter;
   },
   async updateChapterPlan(input) {
-    for (const novel of read<Novel[]>(NOVELS_KEY, [])) {
+    for (const novel of readNovels()) {
       const chapters = await this.listChapters(novel.id),
         index = chapters.findIndex((item) => item.id === input.chapterId);
       if (index < 0) continue;
@@ -583,7 +861,7 @@ export const webPlatform: PlatformPort = {
     throw new Error("Chapter not found");
   },
   async deleteChapter(id) {
-    for (const novel of read<Novel[]>(NOVELS_KEY, [])) {
+    for (const novel of readNovels()) {
       const chapters = await this.listChapters(novel.id);
       if (chapters.some((item) => item.id === id)) {
         write(
@@ -650,7 +928,7 @@ export const webPlatform: PlatformPort = {
     return item;
   },
   async deleteVolume(id) {
-    for (const novel of read<Novel[]>(NOVELS_KEY, [])) {
+    for (const novel of readNovels()) {
       const list = read<StoryVolume[]>(volumesKey(novel.id), []);
       if (!list.some((item) => item.id === id)) continue;
       if (list.length <= 1) throw new Error("At least one volume is required");
@@ -678,7 +956,7 @@ export const webPlatform: PlatformPort = {
     return next;
   },
   async saveScene(input: SaveSceneInput) {
-    const novel = read<Novel[]>(NOVELS_KEY, []).find((item) =>
+    const novel = readNovels().find((item) =>
       read<Chapter[]>(chaptersKey(item.id), []).some(
         (ch) => ch.id === input.chapterId,
       ),
@@ -706,7 +984,7 @@ export const webPlatform: PlatformPort = {
     return item;
   },
   async deleteScene(id) {
-    for (const novel of read<Novel[]>(NOVELS_KEY, [])) {
+    for (const novel of readNovels()) {
       const list = read<StoryScene[]>(scenesKey(novel.id), []),
         found = list.find((item) => item.id === id);
       if (found) {
@@ -735,7 +1013,7 @@ export const webPlatform: PlatformPort = {
     }
   },
   async reorderScenes(chapterId, ids) {
-    for (const novel of read<Novel[]>(NOVELS_KEY, [])) {
+    for (const novel of readNovels()) {
       const list = read<StoryScene[]>(scenesKey(novel.id), []),
         siblings = list.filter((item) => item.chapterId === chapterId);
       if (!siblings.length) return [];
@@ -825,7 +1103,7 @@ export const webPlatform: PlatformPort = {
     const started = Date.now();
     try {
       const response = await fetch(
-        `${profile.baseUrl.replace(/\/$/, "")}/chat/completions`,
+        normalizeChatCompletionsUrl(profile.baseUrl),
         {
           method: "POST",
           headers: {
@@ -870,25 +1148,28 @@ export const webPlatform: PlatformPort = {
     const key = sessionStorage.getItem(`amy-novel:secret:${profile.id}`) ?? "";
     onProgress({ requestId: input.requestId, type: "started" });
     const response = await fetch(
-      `${profile.baseUrl.replace(/\/$/, "")}/chat/completions`,
+      normalizeChatCompletionsUrl(profile.baseUrl),
       {
         method: "POST",
         headers: {
           "content-type": "application/json",
           ...(key ? { authorization: `Bearer ${key}` } : {}),
         },
-        body: JSON.stringify({
-          model: profile.modelId,
-          messages: [{ role: "user", content: input.contextText }],
-          max_tokens: input.maxOutputTokens,
-          temperature: input.temperature,
-          stream: true,
-          stream_options: { include_usage: true },
-        }),
+        body: JSON.stringify(
+          chatCompletionsRequestBody(profile, input.contextText, {
+            maxOutputTokens: input.maxOutputTokens,
+            temperature: input.temperature,
+            stream: true,
+          }),
+        ),
       },
     );
-    if (!response.ok || !response.body)
-      throw new Error(`模型请求失败（HTTP ${response.status}）`);
+    if (!response.ok)
+      throw new ModelRequestError(
+        response.status,
+        parseRetryAfterMs(response.headers.get("retry-after")),
+      );
+    if (!response.body) throw new Error("模型接口未返回流式响应");
     const reader = response.body.getReader(),
       decoder = new TextDecoder();
     let buffer = "",
@@ -1006,7 +1287,7 @@ export const webPlatform: PlatformPort = {
     /* Browser preview stops between chapter checkpoints; Electron aborts immediately. */
   },
   async acceptChapterCandidate(id: string) {
-    for (const novel of read<Novel[]>(NOVELS_KEY, [])) {
+    for (const novel of readNovels()) {
       for (const chapter of await this.listChapters(novel.id)) {
         const list = read<ChapterCandidate[]>(candidatesKey(chapter.id), []),
           index = list.findIndex((item) => item.id === id);
@@ -1026,13 +1307,21 @@ export const webPlatform: PlatformPort = {
           createSnapshot: true,
           origin: "accepted",
         });
+        write(
+          chaptersKey(novel.id),
+          (await this.listChapters(novel.id)).map((value) =>
+            value.id === chapter.id
+              ? { ...value, status: "accepted" as const }
+              : value,
+          ),
+        );
         return item;
       }
     }
     throw new Error("Candidate not found");
   },
   async rejectChapterCandidate(id: string) {
-    for (const novel of read<Novel[]>(NOVELS_KEY, [])) {
+    for (const novel of readNovels()) {
       for (const chapter of await this.listChapters(novel.id)) {
         const list = read<ChapterCandidate[]>(candidatesKey(chapter.id), []),
           index = list.findIndex((item) => item.id === id);
@@ -1125,7 +1414,7 @@ export const webPlatform: PlatformPort = {
     return entity;
   },
   async deleteStoryEntity(entityId: string) {
-    for (const novel of read<Novel[]>(NOVELS_KEY, [])) {
+    for (const novel of readNovels()) {
       const entities = read<StoryEntity[]>(entitiesKey(novel.id), []);
       if (entities.some((item) => item.id === entityId)) {
         write(
@@ -1163,7 +1452,7 @@ export const webPlatform: PlatformPort = {
     return item;
   },
   async deleteTimelineEvent(id: string) {
-    for (const novel of read<Novel[]>(NOVELS_KEY, [])) {
+    for (const novel of readNovels()) {
       const list = read<TimelineEvent[]>(timelineKey(novel.id), []);
       if (list.some((item) => item.id === id)) {
         write(
@@ -1199,7 +1488,7 @@ export const webPlatform: PlatformPort = {
     return item;
   },
   async deleteForeshadowThread(id: string) {
-    for (const novel of read<Novel[]>(NOVELS_KEY, [])) {
+    for (const novel of readNovels()) {
       const list = read<ForeshadowThread[]>(foreshadowKey(novel.id), []);
       if (list.some((item) => item.id === id)) {
         write(
@@ -1211,7 +1500,9 @@ export const webPlatform: PlatformPort = {
     }
   },
   async listCharacterStates(novelId: string, characterId?: string) {
-    const list = read<CharacterState[]>(characterStatesKey(novelId), []);
+    const list = read<CharacterState[]>(characterStatesKey(novelId), []).map(
+      (item) => ({ ...item, skills: item.skills ?? [] }),
+    );
     return characterId
       ? list.filter((item) => item.characterId === characterId)
       : list;
@@ -1232,6 +1523,7 @@ export const webPlatform: PlatformPort = {
         knowledge: normalizeStateList(input.knowledge),
         goals: normalizeStateList(input.goals),
         inventory: normalizeStateList(input.inventory),
+        skills: normalizeStateList(input.skills),
         source: input.source ?? "manual",
         createdAt: index >= 0 ? list[index].createdAt : now,
         updatedAt: now,
@@ -1242,7 +1534,7 @@ export const webPlatform: PlatformPort = {
     return item;
   },
   async deleteCharacterState(id: string) {
-    for (const novel of read<Novel[]>(NOVELS_KEY, [])) {
+    for (const novel of readNovels()) {
       const list = read<CharacterState[]>(characterStatesKey(novel.id), []);
       if (list.some((item) => item.id === id)) {
         write(
@@ -1254,6 +1546,41 @@ export const webPlatform: PlatformPort = {
     }
   },
   async createGenerationDraft(novelId: string, policy: GenerationPolicy) {
+    const workflow = await this.getPlanningWorkflow(novelId);
+    if (!workflow.confirmedSteps.includes(9))
+      throw new Error("请先完成小说框架十步向导和一致性检查");
+    const novel = readNovels().find(
+      (item) => item.id === novelId,
+    );
+    if (!novel) throw new Error("作品不存在");
+    const [sections, entities, structure, allChapters, cycles] = await Promise.all([
+      this.listBibleSections(novelId),
+      this.listStoryEntities(novelId),
+      this.listStoryStructure(novelId),
+      this.listChapters(novelId),
+      this.listPlanningCycles(novelId),
+    ]);
+    const cycle = cycles.find(
+      (item) =>
+        item.startChapter === policy.startChapter &&
+        item.endChapter === policy.endChapter &&
+        ["ready", "generating"].includes(item.status),
+    );
+    if (!cycle)
+      throw new Error(
+        `第 ${policy.startChapter}–${policy.endChapter} 章策划包尚未通过一致性检查`,
+      );
+    assertPlanningReady({
+      novel,
+      sections,
+      entities,
+      volumes: structure.volumes,
+      chapters: allChapters,
+      range: {
+        startChapter: policy.startChapter,
+        endChapter: policy.endChapter,
+      },
+    });
     const now = new Date().toISOString(),
       id = nanoid(),
       batch: GenerationBatch = {
@@ -1285,6 +1612,7 @@ export const webPlatform: PlatformPort = {
       }));
     write(BATCHES_KEY, [batch, ...read<GenerationBatch[]>(BATCHES_KEY, [])]);
     write(jobsKey(id), jobs);
+    await this.savePlanningCycle({ ...cycle, status: "generating" });
     return { id, estimate: estimateGeneration(policy) };
   },
   async listGenerationBatches() {

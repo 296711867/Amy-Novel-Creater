@@ -86,7 +86,7 @@ export interface GenerationPolicy {
   maxRetries: number;
   approvalMode: "candidate" | "chapter_review";
   outputTokenBudget: number;
-  /** 并发生成的章节数（1–3）。候选稿模式下章节彼此独立，可安全并行。 */
+  /** 兼容旧批次配置；长篇候选链启用后执行器固定串行。 */
   concurrency?: number;
   /** 正文生成是否启用 GLM 深度思考（默认关闭：更快，且 max_tokens 全部留给正文）。 */
   deepThinking?: boolean;
@@ -123,4 +123,28 @@ export function validateChapterRange(
   if (policy.chapterWords < 500 || policy.chapterWords > 20000)
     return "单章字数应在 500–20000 之间";
   return null;
+}
+
+export function retryDelayMs(
+  attempt: number,
+  retryAfterMs?: number | null,
+): number {
+  if (retryAfterMs !== null && retryAfterMs !== undefined)
+    return Math.min(120_000, Math.max(0, retryAfterMs));
+  return Math.min(30_000, 1000 * 2 ** Math.max(0, attempt - 1));
+}
+
+export function waitForRetry(ms: number, signal?: AbortSignal): Promise<boolean> {
+  if (signal?.aborted) return Promise.resolve(false);
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", stop);
+      resolve(true);
+    }, ms);
+    const stop = () => {
+      clearTimeout(timer);
+      resolve(false);
+    };
+    signal?.addEventListener("abort", stop, { once: true });
+  });
 }

@@ -1,8 +1,14 @@
 import {
+  chatCompletionsRequestBody,
+  ModelRequestError,
   normalizeChatCompletionsUrl,
+  parseRetryAfterMs,
+  type ThinkingMode,
   type ModelConnectionResult,
   type ModelProfile,
 } from "@domain/model-profile";
+
+export { thinkingRequestBody } from "@domain/model-profile";
 
 interface CompatibleResponse {
   model?: string;
@@ -13,26 +19,6 @@ export interface StreamResult {
   inputTokens: number;
   outputTokens: number;
   cachedTokens: number;
-}
-export type ThinkingMode = "enabled" | "disabled";
-// GLM-4.5+ 是混合推理模型，默认开启深度思考（消耗大量输出 token 且计入
-// max_tokens 总预算）。`thinking` 参数是智谱私有扩展，其他严格的
-// OpenAI 兼容服务（如 OpenAI 官方）会因未知参数返回 400，所以只对
-// bigmodel.cn 域名下发。
-export function thinkingRequestBody(
-  baseUrl: string,
-  mode?: ThinkingMode,
-): Record<string, unknown> {
-  if (!mode) return {};
-  let host: string;
-  try {
-    host = new URL(baseUrl).hostname.toLowerCase();
-  } catch {
-    return {};
-  }
-  return host === "bigmodel.cn" || host.endsWith(".bigmodel.cn")
-    ? { thinking: { type: mode } }
-    : {};
 }
 export async function testOpenAICompatible(
   profile: ModelProfile,
@@ -112,18 +98,21 @@ export async function streamOpenAICompatible(
       "content-type": "application/json",
       ...(apiKey ? { authorization: `Bearer ${apiKey}` } : {}),
     },
-    body: JSON.stringify({
-      model: profile.modelId,
-      messages: [{ role: "user", content: prompt }],
-      max_tokens: maxOutputTokens,
-      temperature,
-      stream: true,
-      stream_options: { include_usage: true },
-      ...thinkingRequestBody(profile.baseUrl, thinking),
-    }),
+    body: JSON.stringify(
+      chatCompletionsRequestBody(profile, prompt, {
+        maxOutputTokens,
+        temperature,
+        stream: true,
+        thinking,
+      }),
+    ),
     signal,
   });
-  if (!response.ok) throw new Error(`模型请求失败（HTTP ${response.status}）`);
+  if (!response.ok)
+    throw new ModelRequestError(
+      response.status,
+      parseRetryAfterMs(response.headers.get("retry-after")),
+    );
   if (!response.body) throw new Error("模型接口未返回流式响应");
   const reader = response.body.getReader(),
     decoder = new TextDecoder();

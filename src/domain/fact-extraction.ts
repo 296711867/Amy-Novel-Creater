@@ -44,6 +44,7 @@ const characterPayload = z.object({
   knowledge: z.array(z.string()).default([]),
   goals: z.array(z.string()).default([]),
   inventory: z.array(z.string()).default([]),
+  skills: z.array(z.string()).default([]),
 });
 const foreshadowPayload = z.object({
   detail: z.string().min(1),

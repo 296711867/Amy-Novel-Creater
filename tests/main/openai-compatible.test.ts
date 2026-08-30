@@ -4,6 +4,10 @@ import {
   testOpenAICompatible,
   thinkingRequestBody,
 } from "../../src/main/model/openai-compatible";
+import {
+  chatCompletionsRequestBody,
+  ModelRequestError,
+} from "../../src/domain/model-profile";
 
 const profile = {
   id: "p",
@@ -77,6 +81,28 @@ describe("OpenAI-compatible adapter", () => {
       cachedTokens: 20,
     });
   });
+  it("preserves retry timing without exposing provider response bodies", async () => {
+    await expect(
+      streamOpenAICompatible(
+        profile,
+        "key",
+        "prompt",
+        100,
+        0.7,
+        () => {},
+        async () =>
+          new Response("private", {
+            status: 429,
+            headers: { "retry-after": "3" },
+          }),
+      ),
+    ).rejects.toMatchObject<ModelRequestError>({
+      status: 429,
+      retryable: true,
+      retryAfterMs: 3000,
+      message: "模型请求失败（HTTP 429）",
+    });
+  });
 });
 
 describe("thinkingRequestBody", () => {
@@ -93,5 +119,27 @@ describe("thinkingRequestBody", () => {
       thinkingRequestBody("https://api.openai.com/v1", "disabled"),
     ).toEqual({});
     expect(thinkingRequestBody("not a url", "disabled")).toEqual({});
+  });
+  it("builds the same provider-safe body for every host", () => {
+    expect(
+      chatCompletionsRequestBody(profile, "规划", {
+        maxOutputTokens: 1000,
+        temperature: 0.7,
+        stream: false,
+        thinking: "disabled",
+      }),
+    ).not.toHaveProperty("thinking");
+    expect(
+      chatCompletionsRequestBody(
+        { ...profile, baseUrl: "https://open.bigmodel.cn/api/paas/v4" },
+        "规划",
+        {
+          maxOutputTokens: 1000,
+          temperature: 0.7,
+          stream: false,
+          thinking: "disabled",
+        },
+      ),
+    ).toHaveProperty("thinking.type", "disabled");
   });
 });

@@ -1,7 +1,7 @@
 import type { Client } from "@libsql/client";
 
 const MIGRATIONS: string[] = [
-  `CREATE TABLE IF NOT EXISTS novels (id TEXT PRIMARY KEY, title TEXT NOT NULL, genre TEXT NOT NULL, premise TEXT NOT NULL, target_words INTEGER NOT NULL, target_chapters INTEGER NOT NULL, chapter_words INTEGER NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
+  `CREATE TABLE IF NOT EXISTS novels (id TEXT PRIMARY KEY, title TEXT NOT NULL, genre TEXT NOT NULL, premise TEXT NOT NULL, target_words INTEGER NOT NULL, target_chapters INTEGER NOT NULL, chapter_words INTEGER NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, cycle_size INTEGER NOT NULL DEFAULT 10)`,
   `CREATE TABLE IF NOT EXISTS chapters (id TEXT PRIMARY KEY, novel_id TEXT NOT NULL REFERENCES novels(id) ON DELETE CASCADE, position INTEGER NOT NULL, title TEXT NOT NULL, outline TEXT NOT NULL DEFAULT '', status TEXT NOT NULL, target_words INTEGER NOT NULL, content TEXT NOT NULL DEFAULT '', word_count INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL, UNIQUE(novel_id, position))`,
   `CREATE TABLE IF NOT EXISTS chapter_versions (id TEXT PRIMARY KEY, chapter_id TEXT NOT NULL REFERENCES chapters(id) ON DELETE CASCADE, version_no INTEGER NOT NULL, origin TEXT NOT NULL, content TEXT NOT NULL, word_count INTEGER NOT NULL, created_at TEXT NOT NULL, UNIQUE(chapter_id, version_no))`,
   `CREATE INDEX IF NOT EXISTS chapters_novel_order ON chapters(novel_id, position)`,
@@ -31,6 +31,13 @@ const MIGRATIONS: string[] = [
   `CREATE TABLE IF NOT EXISTS continuity_findings (id TEXT PRIMARY KEY, candidate_id TEXT NOT NULL, chapter_id TEXT NOT NULL, severity TEXT NOT NULL, category TEXT NOT NULL, message TEXT NOT NULL, evidence TEXT NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
   `CREATE TABLE IF NOT EXISTS fact_proposals (id TEXT PRIMARY KEY, candidate_id TEXT NOT NULL, chapter_id TEXT NOT NULL, kind TEXT NOT NULL, title TEXT NOT NULL, payload_json TEXT NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
   `CREATE TABLE IF NOT EXISTS name_pools (novel_id TEXT PRIMARY KEY, genre TEXT NOT NULL, surnames_json TEXT NOT NULL, given_names_json TEXT NOT NULL, used_names_json TEXT NOT NULL, updated_at TEXT NOT NULL)`,
+  `CREATE TABLE IF NOT EXISTS planning_workflows (novel_id TEXT PRIMARY KEY REFERENCES novels(id) ON DELETE CASCADE, brief_json TEXT NOT NULL DEFAULT '{}', confirmed_steps_json TEXT NOT NULL DEFAULT '[]', updated_at TEXT NOT NULL)`,
+  `CREATE TABLE IF NOT EXISTS planning_runs (id TEXT PRIMARY KEY, novel_id TEXT NOT NULL REFERENCES novels(id) ON DELETE CASCADE, phase TEXT NOT NULL, start_chapter INTEGER, end_chapter INTEGER, profile_id TEXT NOT NULL, provider TEXT NOT NULL, model TEXT NOT NULL, prompt_hash TEXT NOT NULL, raw_response TEXT NOT NULL DEFAULT '', input_tokens INTEGER NOT NULL DEFAULT 0, output_tokens INTEGER NOT NULL DEFAULT 0, cached_tokens INTEGER NOT NULL DEFAULT 0, status TEXT NOT NULL, error TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
+  `CREATE INDEX IF NOT EXISTS planning_runs_novel_time ON planning_runs(novel_id, created_at DESC)`,
+  `CREATE TABLE IF NOT EXISTS planning_cycles (id TEXT PRIMARY KEY, novel_id TEXT NOT NULL REFERENCES novels(id) ON DELETE CASCADE, start_chapter INTEGER NOT NULL, end_chapter INTEGER NOT NULL, status TEXT NOT NULL, goal TEXT NOT NULL DEFAULT '', opening_state TEXT NOT NULL DEFAULT '', climax TEXT NOT NULL DEFAULT '', expected_closing_state TEXT NOT NULL DEFAULT '', actual_closing_state TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
+  `CREATE INDEX IF NOT EXISTS planning_cycles_novel_range ON planning_cycles(novel_id, start_chapter, end_chapter, created_at DESC)`,
+  `CREATE TABLE IF NOT EXISTS planning_proposals (id TEXT PRIMARY KEY, novel_id TEXT NOT NULL REFERENCES novels(id) ON DELETE CASCADE, cycle_id TEXT NOT NULL, start_chapter INTEGER NOT NULL, end_chapter INTEGER NOT NULL, action TEXT NOT NULL, target_type TEXT NOT NULL, target_name TEXT NOT NULL, patch_json TEXT NOT NULL DEFAULT '{}', reason TEXT NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
+  `CREATE INDEX IF NOT EXISTS planning_proposals_novel_range ON planning_proposals(novel_id, start_chapter, end_chapter, status)`,
 ];
 
 export async function runMigrations(client: Client): Promise<void> {
@@ -38,4 +45,14 @@ export async function runMigrations(client: Client): Promise<void> {
   const columns = await client.execute(`PRAGMA table_info(chapters)`);
   if (!columns.rows.some((row) => String(row.name) === "volume_id"))
     await client.execute(`ALTER TABLE chapters ADD COLUMN volume_id TEXT`);
+  const stateColumns = await client.execute(`PRAGMA table_info(character_states)`);
+  if (!stateColumns.rows.some((row) => String(row.name) === "skills_json"))
+    await client.execute(
+      `ALTER TABLE character_states ADD COLUMN skills_json TEXT NOT NULL DEFAULT '[]'`,
+    );
+  const novelColumns = await client.execute(`PRAGMA table_info(novels)`);
+  if (!novelColumns.rows.some((row) => String(row.name) === "cycle_size"))
+    await client.execute(
+      `ALTER TABLE novels ADD COLUMN cycle_size INTEGER NOT NULL DEFAULT 10`,
+    );
 }

@@ -2,6 +2,7 @@ import type { Chapter } from "./novel";
 import type { StoryEntity } from "./story-bible";
 import type { ForeshadowThread } from "./continuity";
 import type { StoryScene } from "./story-structure";
+import type { ChapterCandidate } from "./chapter-generation";
 
 export type FindingSeverity = "error" | "warning" | "info";
 export interface ContinuityFinding {
@@ -42,6 +43,12 @@ export interface QualityCheckInput {
   scenes: StoryScene[];
   entities: StoryEntity[];
   foreshadow: ForeshadowThread[];
+}
+export function assertCandidateAcceptedForCanon(
+  candidate: Pick<ChapterCandidate, "status"> | null | undefined,
+): void {
+  if (candidate?.status !== "accepted")
+    throw new Error("请先接受候选稿，再把事实建议写入正史");
 }
 const includesAny = (content: string, values: string[]) =>
   values.some((value) => value.trim() && content.includes(value.trim()));

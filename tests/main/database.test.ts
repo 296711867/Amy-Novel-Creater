@@ -88,6 +88,7 @@ describe("NovelDatabase", () => {
       knowledge: ["导航仪异常"],
       goals: ["抵达边境"],
       inventory: ["旧钥匙"],
+      skills: ["星图导航"],
     });
     expect(state).toMatchObject({
       location: "远航舰",
@@ -152,6 +153,89 @@ describe("NovelDatabase", () => {
       measurement: "estimated",
     });
     expect((await database.listUsage(created.novel.id))[0]).toEqual(usage);
+    await expect(
+      database.createGenerationBatch(created.novel.id, {
+        startChapter: 1,
+        endChapter: 2,
+        chapterWords: 2000,
+        continuityCheck: true,
+        maxRetries: 2,
+        approvalMode: "candidate",
+        outputTokenBudget: 10000,
+      }),
+    ).rejects.toThrow("请先完成小说框架十步向导");
+    const workflow = await database.savePlanningWorkflow({
+      ...(await database.getPlanningWorkflow(created.novel.id)),
+      brief: {
+        audience: "科幻读者",
+        style: "克制",
+        boundaries: "不复活",
+        sellingPoint: "代际远航",
+        conflict: "资源与时间",
+        protagonistGoal: "抵达新家园",
+        ending: "开放式",
+      },
+      confirmedSteps: [1, 2, 3, 4, 5, 6, 7, 8, 9],
+      updatedAt: new Date().toISOString(),
+    });
+    expect(workflow).toMatchObject({
+      novelId: created.novel.id,
+      confirmedSteps: [1, 2, 3, 4, 5, 6, 7, 8, 9],
+    });
+    for (const [kind, content] of [
+      ["world", "星际航行遵守光速限制。"],
+      ["style", "克制的第三人称限知。"],
+      ["boundaries", "死亡角色不得复活。"],
+    ] as const)
+      await database.saveBibleSection({
+        novelId: created.novel.id,
+        kind,
+        content,
+      });
+    await database.saveStoryEntity({
+      id: character.id,
+      novelId: created.novel.id,
+      type: "character",
+      name: character.name,
+      summary: character.summary,
+      aliases: character.aliases,
+      profile: { ...character.profile, tier: "protagonist" },
+    });
+    for (const [name, tier] of [
+      ["沈岚", "support"],
+      ["老周", "recurring"],
+    ] as const)
+      await database.saveStoryEntity({
+        novelId: created.novel.id,
+        type: "character",
+        name,
+        summary: "远航舰成员",
+        aliases: [],
+        profile: { tier },
+      });
+    for (const [type, name] of [
+      ["location", "远航舰"],
+      ["organization", "远航议会"],
+      ["item", "旧导航仪"],
+    ] as const)
+      await database.saveStoryEntity({
+        novelId: created.novel.id,
+        type,
+        name,
+        summary: "服务主线冲突的关键设定",
+        aliases: [],
+        profile: {},
+      });
+    await database.deleteChapter(created.chapters[2].id);
+    const plannedChapters = await database.listChapters(created.novel.id);
+    for (const chapter of plannedChapters)
+      await database.updateChapterPlan({
+        chapterId: chapter.id,
+        volumeId: chapter.volumeId,
+        title: `第${chapter.position}章 航线${chapter.position}`,
+        outline: `第 ${chapter.position} 章完整事件、冲突、结果与钩子。`,
+        targetWords: chapter.targetWords,
+      });
     const profile = await database.saveModelProfile(
       {
         name: "DeepSeek",
@@ -197,6 +281,17 @@ describe("NovelDatabase", () => {
       origin: "accepted",
       content: candidate.content,
     });
+    await database.savePlanningCycle({
+      novelId: created.novel.id,
+      startChapter: 1,
+      endChapter: 2,
+      status: "ready",
+      goal: "完成首次远航",
+      openingState: "仍在母星",
+      climax: "突破封锁",
+      expectedClosingState: "进入航道",
+      actualClosingState: "",
+    });
     const batchResult = await database.createGenerationBatch(created.novel.id, {
       startChapter: 1,
       endChapter: 2,
@@ -220,5 +315,39 @@ describe("NovelDatabase", () => {
     expect(
       (await database.getGenerationBatch(batchResult.id))?.outputTokensUsed,
     ).toBe(1200);
+    await database.deleteNovel(created.novel.id);
+    expect(await database.listNovels()).toEqual([]);
+    expect(await database.listChapters(created.novel.id)).toEqual([]);
+    expect(await database.listGenerationBatches()).toEqual([]);
+    expect(await database.listUsage(created.novel.id)).toEqual([]);
+    await expect(database.deleteNovel(created.novel.id)).rejects.toThrow(
+      "作品不存在",
+    );
+  });
+
+  it("persists and updates the rolling cycle size", async () => {
+    const created = await database.createNovel({
+      title: "批次大小测试",
+      genre: "玄幻",
+      premise: "测试每批章数",
+      targetChapters: 30,
+      chapterWords: 1000,
+    });
+    expect(created.novel.cycleSize).toBe(10);
+    const custom = await database.createNovel({
+      title: "自定义批次",
+      genre: "科幻",
+      premise: "五章一批",
+      targetChapters: 20,
+      chapterWords: 1000,
+      cycleSize: 5,
+    });
+    expect(custom.novel.cycleSize).toBe(5);
+    expect((await database.getNovel(custom.novel.id))?.cycleSize).toBe(5);
+    const updated = await database.updateCycleSize(custom.novel.id, 99);
+    expect(updated.cycleSize).toBe(15);
+    expect((await database.getNovel(custom.novel.id))?.cycleSize).toBe(15);
+    await database.deleteNovel(created.novel.id);
+    await database.deleteNovel(custom.novel.id);
   });
 });

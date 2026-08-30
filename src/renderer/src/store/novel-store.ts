@@ -8,6 +8,8 @@ import type {
 } from "@domain/novel";
 import {
   nextRunnableJob,
+  retryDelayMs,
+  waitForRetry,
   type GenerationBatch,
   type GenerationJob,
   type GenerationPolicy,
@@ -36,25 +38,50 @@ import type {
   StoryVolume,
 } from "@domain/story-structure";
 import type { CreateChapterInput, UpdateChapterPlanInput } from "@domain/novel";
-import { buildContextPack, type ContextPack } from "@domain/context-pack";
+import {
+  buildContextPack,
+  selectRecentChapters,
+  type ContextPack,
+} from "@domain/context-pack";
 import type { UsageRecord } from "@domain/usage";
 import type {
   ModelConnectionResult,
   ModelProfile,
   SaveModelProfileInput,
 } from "@domain/model-profile";
+import { ModelRequestError } from "@domain/model-profile";
 import type {
   ChapterCandidate,
   GenerateChapterInput,
   GenerationProgress,
 } from "@domain/chapter-generation";
 import type { FactProposal, StoredFinding } from "@domain/quality-check";
+import { assertCandidateAcceptedForCanon } from "@domain/quality-check";
 import { parseProposalPayload } from "@domain/fact-extraction";
 import {
   parseNovelProject,
   type NovelProjectBundle,
 } from "@domain/project-export";
-import type { NovelPlanSummary, PlanPhase } from "@domain/planning";
+import type { ScopeAdvice } from "@domain/scope-advisor";
+import type {
+  NovelPlanSummary,
+  PlanPhase,
+  PlanRange,
+} from "@domain/planning";
+import type { PlanningRun } from "@domain/planning-run";
+import type {
+  PlanningCycle,
+  SavePlanningCycleInput,
+} from "@domain/planning-cycle";
+import type { PlanningProposal } from "@domain/planning-proposal";
+import {
+  confirmPlanningStep as confirmWorkflowStep,
+  defaultPlanningWorkflow,
+  invalidatePlanningFrom as invalidateWorkflowFrom,
+  type PlanningBrief,
+  type PlanningReviewStep,
+  type PlanningWorkflow,
+} from "@domain/planning-workflow";
 
 interface NovelState {
   novels: Novel[];
@@ -75,14 +102,76 @@ interface NovelState {
   jobs: Record<string, GenerationJob[]>;
   findings: Record<string, StoredFinding[]>;
   factProposals: Record<string, FactProposal[]>;
+  planningWorkflows: Record<string, PlanningWorkflow>;
+  planningRuns: Record<string, PlanningRun[]>;
+  planningCycles: Record<string, PlanningCycle[]>;
+  planningProposals: Record<string, PlanningProposal[]>;
+  /** 进行中的规划阶段（novelId -> phase）；挂在 store 上，切换页面不丢失。 */
+  planningBusy: Record<string, PlanPhase | null>;
+  /** 最近一次规划的结果或错误文案，供页面重新挂载后回显。 */
+  planningMessage: Record<string, string>;
+  /** 单章生成中的请求（chapterId -> 请求信息）；防止切页回来重复发起。 */
+  activeRequests: Record<string, { requestId: string; startedAt: number }>;
+  /** 开书前的篇幅建议（创建页使用，不落库）。 */
+  scopeAdvice: ScopeAdvice | null;
+  scopeAdviceBusy: boolean;
+  scopeAdviceError: string;
+  /** 第 1–2 步七项简报的 AI 草稿：切页不丢，作者确认后写入工作流。 */
+  draftedBrief: PlanningBrief | null;
+  briefDraftBusy: boolean;
+  briefDraftError: string;
+  suggestScope(input: {
+    title: string;
+    genre: string;
+    premise: string;
+    notes?: string;
+  }): Promise<ScopeAdvice | null>;
+  clearScopeAdvice(): void;
+  suggestBrief(input: {
+    title: string;
+    genre: string;
+    premise: string;
+    notes?: string;
+  }): Promise<PlanningBrief | null>;
+  clearDraftedBrief(): void;
+  setPlanningMessage(novelId: string, message: string): void;
   loading: boolean;
   initialized: boolean;
   loadNovels(): Promise<void>;
+  deleteNovel(novelId: string): Promise<void>;
   createNovel(input: CreateNovelInput): Promise<Novel>;
+  updateNovelSettings(
+    novelId: string,
+    patch: { cycleSize: number },
+  ): Promise<Novel>;
+  loadPlanningWorkflow(novelId: string): Promise<PlanningWorkflow>;
+  savePlanningBrief(
+    novelId: string,
+    brief: PlanningBrief,
+    step: 1 | 2,
+  ): Promise<PlanningWorkflow>;
+  confirmPlanningReview(
+    novelId: string,
+    step: PlanningReviewStep,
+  ): Promise<PlanningWorkflow>;
+  invalidatePlanning(
+    novelId: string,
+    step: PlanningReviewStep,
+  ): Promise<PlanningWorkflow>;
   generateNovelPlan(
     novelId: string,
     phase: PlanPhase,
+    range?: PlanRange,
   ): Promise<NovelPlanSummary>;
+  loadPlanningRuns(novelId: string): Promise<PlanningRun[]>;
+  loadPlanningCycles(novelId: string): Promise<PlanningCycle[]>;
+  savePlanningCycle(input: SavePlanningCycleInput): Promise<PlanningCycle>;
+  loadPlanningProposals(novelId: string): Promise<PlanningProposal[]>;
+  reviewPlanningProposal(
+    novelId: string,
+    proposalId: string,
+    accept: boolean,
+  ): Promise<PlanningProposal>;
   loadChapters(novelId: string): Promise<Chapter[]>;
   getChapter(chapterId: string): Promise<Chapter | null>;
   saveChapter(input: SaveChapterInput): Promise<Chapter>;
@@ -108,6 +197,7 @@ interface NovelState {
     chapterId: string,
     inputBudget: number,
     outputReserved: number,
+    candidateChain?: Chapter[],
   ): Promise<ContextPack>;
   loadUsage(novelId?: string): Promise<UsageRecord[]>;
   loadModelProfiles(): Promise<ModelProfile[]>;
@@ -165,6 +255,12 @@ interface NovelState {
   ): ReturnType<typeof platform.createGenerationDraft>;
 }
 const activeChapterRequests = new Map<string, string>();
+const activeBatchRequests = new Set<string>();
+function omitKey<T>(record: Record<string, T>, key: string): Record<string, T> {
+  const next = { ...record };
+  delete next[key];
+  return next;
+}
 
 export const useNovelStore = create<NovelState>((set, get) => ({
   novels: [],
@@ -185,6 +281,60 @@ export const useNovelStore = create<NovelState>((set, get) => ({
   jobs: {},
   findings: {},
   factProposals: {},
+  planningWorkflows: {},
+  planningRuns: {},
+  planningCycles: {},
+  planningProposals: {},
+  planningBusy: {},
+  planningMessage: {},
+  activeRequests: {},
+  scopeAdvice: null,
+  scopeAdviceBusy: false,
+  scopeAdviceError: "",
+  draftedBrief: null,
+  briefDraftBusy: false,
+  briefDraftError: "",
+  async suggestScope(input) {
+    set({ scopeAdviceBusy: true, scopeAdviceError: "" });
+    try {
+      const advice = await platform.suggestNovelScope(input);
+      set({ scopeAdvice: advice, scopeAdviceBusy: false });
+      return advice;
+    } catch (error) {
+      set({
+        scopeAdviceBusy: false,
+        scopeAdviceError:
+          error instanceof Error ? error.message : "篇幅建议生成失败",
+      });
+      return null;
+    }
+  },
+  clearScopeAdvice() {
+    set({ scopeAdvice: null, scopeAdviceError: "" });
+  },
+  async suggestBrief(input) {
+    set({ briefDraftBusy: true, briefDraftError: "" });
+    try {
+      const brief = await platform.suggestPlanningBrief(input);
+      set({ draftedBrief: brief, briefDraftBusy: false });
+      return brief;
+    } catch (error) {
+      set({
+        briefDraftBusy: false,
+        briefDraftError:
+          error instanceof Error ? error.message : "简报起草失败",
+      });
+      return null;
+    }
+  },
+  clearDraftedBrief() {
+    set({ draftedBrief: null, briefDraftError: "" });
+  },
+  setPlanningMessage(novelId, message) {
+    set({
+      planningMessage: { ...get().planningMessage, [novelId]: message },
+    });
+  },
   loading: false,
   initialized: false,
   async loadNovels() {
@@ -195,22 +345,201 @@ export const useNovelStore = create<NovelState>((set, get) => ({
       set({ loading: false, initialized: true });
     }
   },
+  async deleteNovel(id) {
+    await platform.deleteNovel(id);
+    const state = get();
+    set({
+      novels: state.novels.filter((item) => item.id !== id),
+      batches: state.batches.filter((item) => item.novelId !== id),
+      chapters: omitKey(state.chapters, id),
+      bibleSections: omitKey(state.bibleSections, id),
+      entities: omitKey(state.entities, id),
+      timelineEvents: omitKey(state.timelineEvents, id),
+      foreshadowThreads: omitKey(state.foreshadowThreads, id),
+      characterStates: omitKey(state.characterStates, id),
+      volumes: omitKey(state.volumes, id),
+      scenes: omitKey(state.scenes, id),
+      contextPacks: omitKey(state.contextPacks, id),
+      planningWorkflows: omitKey(state.planningWorkflows, id),
+      planningRuns: omitKey(state.planningRuns, id),
+      planningCycles: omitKey(state.planningCycles, id),
+      planningProposals: omitKey(state.planningProposals, id),
+      planningBusy: omitKey(state.planningBusy, id),
+      planningMessage: omitKey(state.planningMessage, id),
+      usage: state.usage.filter((item) => item.novelId !== id),
+    });
+  },
   async createNovel(input) {
     const result = await platform.createNovel(input);
     set({
       novels: [result.novel, ...get().novels],
       chapters: { ...get().chapters, [result.novel.id]: result.chapters },
+      planningWorkflows: {
+        ...get().planningWorkflows,
+        [result.novel.id]: defaultPlanningWorkflow(result.novel.id),
+      },
     });
     return result.novel;
   },
-  async generateNovelPlan(novelId, phase) {
-    const summary = await platform.generateNovelPlan(novelId, phase);
+  async updateNovelSettings(novelId, patch) {
+    const updated = await platform.updateNovelSettings(novelId, patch);
+    set({
+      novels: get().novels.map((item) =>
+        item.id === novelId ? updated : item,
+      ),
+    });
+    return updated;
+  },
+  async loadPlanningWorkflow(novelId) {
+    const workflow = await platform.getPlanningWorkflow(novelId);
+    set({
+      planningWorkflows: {
+        ...get().planningWorkflows,
+        [novelId]: workflow,
+      },
+    });
+    return workflow;
+  },
+  async savePlanningBrief(novelId, brief, step) {
+    const current =
+        get().planningWorkflows[novelId] ??
+        (await get().loadPlanningWorkflow(novelId)),
+      workflow = confirmWorkflowStep(
+        { ...invalidateWorkflowFrom(current, step), brief },
+        step,
+      ),
+      saved = await platform.savePlanningWorkflow(workflow);
+    set({
+      planningWorkflows: {
+        ...get().planningWorkflows,
+        [novelId]: saved,
+      },
+    });
+    return saved;
+  },
+  async confirmPlanningReview(novelId, step) {
+    const current =
+        get().planningWorkflows[novelId] ??
+        (await get().loadPlanningWorkflow(novelId)),
+      saved = await platform.savePlanningWorkflow(
+        confirmWorkflowStep(current, step),
+      );
+    set({
+      planningWorkflows: {
+        ...get().planningWorkflows,
+        [novelId]: saved,
+      },
+    });
+    return saved;
+  },
+  async invalidatePlanning(novelId, step) {
+    const current =
+        get().planningWorkflows[novelId] ??
+        (await get().loadPlanningWorkflow(novelId)),
+      invalidated = invalidateWorkflowFrom(current, step);
+    if (invalidated.confirmedSteps.length === current.confirmedSteps.length)
+      return current;
+    const saved = await platform.savePlanningWorkflow(invalidated);
+    set({
+      planningWorkflows: {
+        ...get().planningWorkflows,
+        [novelId]: saved,
+      },
+    });
+    return saved;
+  },
+  async generateNovelPlan(novelId, phase, range) {
+    // busy/结果文案挂在 store 上：规划耗时以分钟计，作者切页回来仍能看到进行中状态。
+    set({
+      planningBusy: { ...get().planningBusy, [novelId]: phase },
+      planningMessage: { ...get().planningMessage, [novelId]: "" },
+    });
+    try {
+      const summary = await platform.generateNovelPlan(novelId, phase, range);
+      await get().invalidatePlanning(
+        novelId,
+        phase === "bible" ? 3 : phase === "cast" ? 5 : phase === "scenes" ? 6 : 7,
+      );
+      await Promise.all([
+        get().loadChapters(novelId),
+        get().loadBible(novelId),
+        get().loadEntities(novelId),
+        get().loadStructure(novelId),
+        get().loadPlanningRuns(novelId),
+        get().loadPlanningCycles(novelId),
+        get().loadPlanningProposals(novelId),
+      ]);
+      set({
+        planningMessage: {
+          ...get().planningMessage,
+          [novelId]:
+            phase === "bible"
+              ? `Amy 已生成 ${summary.sections} 份核心文档和 ${summary.entities} 张设定卡，请审核后确认。`
+              : phase === "cast"
+                ? `Amy 已生成 ${summary.entities} 名分层人物，并补充 ${summary.extras} 个龙套名称。`
+                : phase === "scenes"
+                  ? `Amy 已生成 ${summary.entities} 张可复用场景卡。`
+                  : `Amy 已完成第 ${range?.startChapter}–${range?.endChapter} 章策划包：${summary.chapters} 个标题与章纲，并同步整理宏观分卷路线。`,
+        },
+      });
+      return summary;
+    } catch (error) {
+      set({
+        planningMessage: {
+          ...get().planningMessage,
+          [novelId]: `生成失败：${error instanceof Error ? error.message : "未知错误"}`,
+        },
+      });
+      throw error;
+    } finally {
+      set({ planningBusy: { ...get().planningBusy, [novelId]: null } });
+    }
+  },
+  async loadPlanningRuns(novelId) {
+    const runs = await platform.listPlanningRuns(novelId);
+    set({ planningRuns: { ...get().planningRuns, [novelId]: runs } });
+    return runs;
+  },
+  async loadPlanningCycles(novelId) {
+    const cycles = await platform.listPlanningCycles(novelId);
+    set({ planningCycles: { ...get().planningCycles, [novelId]: cycles } });
+    return cycles;
+  },
+  async savePlanningCycle(input) {
+    const cycle = await platform.savePlanningCycle(input),
+      list = get().planningCycles[cycle.novelId] ?? [],
+      next = [cycle, ...list.filter((item) => item.id !== cycle.id)].sort(
+        (a, b) => a.startChapter - b.startChapter,
+      );
+    set({
+      planningCycles: {
+        ...get().planningCycles,
+        [cycle.novelId]: next,
+      },
+    });
+    return cycle;
+  },
+  async loadPlanningProposals(novelId) {
+    const proposals = await platform.listPlanningProposals(novelId);
+    set({
+      planningProposals: {
+        ...get().planningProposals,
+        [novelId]: proposals,
+      },
+    });
+    return proposals;
+  },
+  async reviewPlanningProposal(novelId, proposalId, accept) {
+    const proposal = await platform.reviewPlanningProposal(
+      novelId,
+      proposalId,
+      accept ? "accepted" : "rejected",
+    );
     await Promise.all([
-      get().loadChapters(novelId),
-      get().loadBible(novelId),
-      get().loadStructure(novelId),
+      get().loadPlanningProposals(novelId),
+      get().loadEntities(novelId),
     ]);
-    return summary;
+    return proposal;
   },
   async loadChapters(novelId) {
     const cached = get().chapters[novelId];
@@ -265,6 +594,7 @@ export const useNovelStore = create<NovelState>((set, get) => ({
   },
   async createChapter(input) {
     const item = await platform.createChapter(input);
+    await get().invalidatePlanning(input.novelId, 8);
     set({
       chapters: {
         ...get().chapters,
@@ -276,6 +606,7 @@ export const useNovelStore = create<NovelState>((set, get) => ({
   async updateChapterPlan(input) {
     const item = await platform.updateChapterPlan(input),
       list = get().chapters[item.novelId] ?? [];
+    await get().invalidatePlanning(item.novelId, 8);
     set({
       chapters: {
         ...get().chapters,
@@ -288,6 +619,7 @@ export const useNovelStore = create<NovelState>((set, get) => ({
   },
   async deleteChapter(novelId, id) {
     await platform.deleteChapter(id);
+    await get().invalidatePlanning(novelId, 8);
     set({
       chapters: {
         ...get().chapters,
@@ -305,6 +637,7 @@ export const useNovelStore = create<NovelState>((set, get) => ({
   },
   async reorderChapters(novelId, ids) {
     const list = await platform.reorderChapters(novelId, ids);
+    await get().invalidatePlanning(novelId, 8);
     set({ chapters: { ...get().chapters, [novelId]: list } });
   },
   async saveVolume(input) {
@@ -313,11 +646,13 @@ export const useNovelStore = create<NovelState>((set, get) => ({
       next = list.some((value) => value.id === item.id)
         ? list.map((value) => (value.id === item.id ? item : value))
         : [...list, item];
+    await get().invalidatePlanning(input.novelId, 7);
     set({ volumes: { ...get().volumes, [input.novelId]: next } });
     return item;
   },
   async deleteVolume(novelId, id) {
     await platform.deleteVolume(id);
+    await get().invalidatePlanning(novelId, 7);
     set({
       volumes: {
         ...get().volumes,
@@ -335,6 +670,7 @@ export const useNovelStore = create<NovelState>((set, get) => ({
   },
   async reorderVolumes(novelId, ids) {
     const list = await platform.reorderVolumes(novelId, ids);
+    await get().invalidatePlanning(novelId, 7);
     set({ volumes: { ...get().volumes, [novelId]: list } });
   },
   async saveScene(novelId, input) {
@@ -343,11 +679,13 @@ export const useNovelStore = create<NovelState>((set, get) => ({
       next = list.some((value) => value.id === item.id)
         ? list.map((value) => (value.id === item.id ? item : value))
         : [...list, item];
+    await get().invalidatePlanning(novelId, 8);
     set({ scenes: { ...get().scenes, [novelId]: next } });
     return item;
   },
   async deleteScene(novelId, id) {
     await platform.deleteScene(id);
+    await get().invalidatePlanning(novelId, 8);
     set({
       scenes: {
         ...get().scenes,
@@ -362,9 +700,16 @@ export const useNovelStore = create<NovelState>((set, get) => ({
       other = (get().scenes[novelId] ?? []).filter(
         (item) => item.chapterId !== chapterId,
       );
+    await get().invalidatePlanning(novelId, 8);
     set({ scenes: { ...get().scenes, [novelId]: [...other, ...siblings] } });
   },
-  async buildContext(novelId, chapterId, inputBudget, outputReserved) {
+  async buildContext(
+    novelId,
+    chapterId,
+    inputBudget,
+    outputReserved,
+    candidateChain = [],
+  ) {
     await Promise.all([
       get().loadChapters(novelId),
       get().loadBible(novelId),
@@ -380,11 +725,11 @@ export const useNovelStore = create<NovelState>((set, get) => ({
     const volume = state.volumes[novelId]?.find(
         (item) => item.id === chapter.volumeId,
       ),
-      recent = chapters
-        .filter(
-          (item) => item.position < chapter.position && item.content.trim(),
-        )
-        .slice(-2);
+      recent = selectRecentChapters(
+        chapters,
+        chapter.position,
+        candidateChain,
+      );
     const pack = buildContextPack({
       novel,
       chapter,
@@ -468,6 +813,15 @@ export const useNovelStore = create<NovelState>((set, get) => ({
   testModelConnection: (id, key) => platform.testModelConnection(id, key),
   async generateChapter(input, onProgress) {
     activeChapterRequests.set(input.chapterId, input.requestId);
+    set({
+      activeRequests: {
+        ...get().activeRequests,
+        [input.chapterId]: {
+          requestId: input.requestId,
+          startedAt: Date.now(),
+        },
+      },
+    });
     try {
       const item = await platform.generateChapter(input, onProgress);
       set({
@@ -482,6 +836,7 @@ export const useNovelStore = create<NovelState>((set, get) => ({
       return item;
     } finally {
       activeChapterRequests.delete(input.chapterId);
+      set({ activeRequests: omitKey(get().activeRequests, input.chapterId) });
     }
   },
   async loadCandidates(chapterId) {
@@ -547,7 +902,15 @@ export const useNovelStore = create<NovelState>((set, get) => ({
     if (platform.host === "electron") {
       await platform.startBackgroundBatch(id);
       await get().loadBatches();
-    } else await get().runBatch(id);
+    } else {
+      if (activeBatchRequests.has(id)) return;
+      activeBatchRequests.add(id);
+      try {
+        await get().runBatch(id);
+      } finally {
+        activeBatchRequests.delete(id);
+      }
+    }
   },
   async loadQuality(id) {
     const [findings, proposals] = await Promise.all([
@@ -576,6 +939,15 @@ export const useNovelStore = create<NovelState>((set, get) => ({
     );
     if (!proposal) throw new Error("事实建议不存在");
     if (accept) {
+      const cachedCandidate = Object.values(get().candidates)
+          .flat()
+          .find((item) => item.id === candidateId),
+        candidate =
+          cachedCandidate ??
+          (await platform.listChapterCandidates(proposal.chapterId)).find(
+            (item) => item.id === candidateId,
+          );
+      assertCandidateAcceptedForCanon(candidate);
       const chapter = await get().getChapter(proposal.chapterId);
       if (!chapter) throw new Error("建议对应章节不存在");
       const parsed = parseProposalPayload(proposal);
@@ -623,6 +995,7 @@ export const useNovelStore = create<NovelState>((set, get) => ({
           knowledge: parsed.payload.knowledge,
           goals: parsed.payload.goals,
           inventory: parsed.payload.inventory,
+          skills: parsed.payload.skills,
           source: "ai_candidate",
         });
       } else
@@ -664,6 +1037,10 @@ export const useNovelStore = create<NovelState>((set, get) => ({
       foreshadow,
       characterStates,
       usage,
+      workflow,
+      planningRuns,
+      planningCycles,
+      planningProposals,
     ] = await Promise.all([
       platform.listChapters(novelId),
       platform.listBibleSections(novelId),
@@ -673,6 +1050,10 @@ export const useNovelStore = create<NovelState>((set, get) => ({
       platform.listForeshadowThreads(novelId),
       platform.listCharacterStates(novelId),
       platform.listUsage(novelId),
+      platform.getPlanningWorkflow(novelId),
+      platform.listPlanningRuns(novelId),
+      platform.listPlanningCycles(novelId),
+      platform.listPlanningProposals(novelId),
     ]);
     const [versionGroups, candidateGroups] = await Promise.all([
       Promise.all(
@@ -698,6 +1079,10 @@ export const useNovelStore = create<NovelState>((set, get) => ({
       characterStates,
       usage,
       candidates: candidateGroups.flat(),
+      workflow,
+      planningRuns,
+      planningCycles,
+      planningProposals,
     };
   },
   async importProject(value) {
@@ -741,16 +1126,47 @@ export const useNovelStore = create<NovelState>((set, get) => ({
           error: "",
         });
         jobs = await get().loadJobs(batchId);
-        const output = Math.min(
+        const chapterList = (get().chapters[batch.novelId] ?? []).length
+            ? get().chapters[batch.novelId]
+            : await get().loadChapters(batch.novelId),
+          candidateChain = jobs
+            .filter((item) => item.position < job.position && item.candidateId)
+            .flatMap((item) => {
+              const chapter = chapterList.find(
+                  (value) => value.id === item.chapterId,
+                ),
+                candidate = Object.values(get().candidates)
+                  .flat()
+                  .find((value) => value.id === item.candidateId);
+              return chapter && candidate
+                ? [
+                    {
+                      ...chapter,
+                      content: `【本批次候选稿，尚未进入正史】\n${candidate.content}`,
+                    },
+                  ]
+                : [];
+            }),
+          remaining = currentBatch
+            ? currentBatch.policy.outputTokenBudget -
+              currentBatch.outputTokensUsed
+            : 0,
+          output = Math.min(
             Math.ceil(batch.policy.chapterWords * 1.5),
             profile.contextWindow - 4000,
-          ),
-          pack = await get().buildContext(
-            batch.novelId,
-            job.chapterId,
-            Math.max(4000, profile.contextWindow - output),
-            output,
+            remaining,
           );
+        if (output < 500) {
+          await get().setBatchStatus(batchId, "paused");
+          return;
+        }
+        const pack = await get().buildContext(
+          batch.novelId,
+          job.chapterId,
+          Math.max(4000, profile.contextWindow - output),
+          output,
+          candidateChain,
+        );
         await platform.updateGenerationJob(job.id, "generating");
         const candidate = await get().generateChapter(
           {
@@ -772,15 +1188,26 @@ export const useNovelStore = create<NovelState>((set, get) => ({
           inputTokens: candidate.inputTokens,
           outputTokens: candidate.outputTokens,
         });
+        await get().loadBatches();
         jobs = await get().loadJobs(batchId);
       } catch (error) {
         const attempt = job.attempt + 1,
+          retryable =
+            !(error instanceof ModelRequestError) || error.retryable === true,
           status =
-            attempt <= batch.policy.maxRetries ? "waiting_retry" : "failed";
+            retryable && attempt <= batch.policy.maxRetries
+              ? "waiting_retry"
+              : "failed";
         await platform.updateGenerationJob(job.id, status, {
           attempt,
           error: error instanceof Error ? error.message : "生成失败",
         });
+        if (status === "waiting_retry") {
+          const retryAfter =
+            error instanceof ModelRequestError ? error.retryAfterMs : null;
+          await waitForRetry(retryDelayMs(attempt, retryAfter));
+          await platform.updateGenerationJob(job.id, "queued");
+        }
         jobs = await get().loadJobs(batchId);
         if (status === "failed") {
           await get().setBatchStatus(batchId, "failed");
@@ -800,6 +1227,7 @@ export const useNovelStore = create<NovelState>((set, get) => ({
   },
   async saveBibleSection(input) {
     const section = await platform.saveBibleSection(input);
+    await get().invalidatePlanning(input.novelId, 3);
     const sections = get().bibleSections[input.novelId] ?? [];
     set({
       bibleSections: {
@@ -825,6 +1253,10 @@ export const useNovelStore = create<NovelState>((set, get) => ({
   },
   async saveEntity(input) {
     const entity = await platform.saveStoryEntity(input);
+    await get().invalidatePlanning(
+      input.novelId,
+      input.type === "character" ? 4 : 6,
+    );
     const list = get().entities[input.novelId] ?? [],
       index = list.findIndex((item) => item.id === entity.id),
       next =
@@ -835,7 +1267,14 @@ export const useNovelStore = create<NovelState>((set, get) => ({
     return entity;
   },
   async deleteEntity(novelId, entityId) {
+    const entity = (get().entities[novelId] ?? []).find(
+      (item) => item.id === entityId,
+    );
     await platform.deleteStoryEntity(entityId);
+    await get().invalidatePlanning(
+      novelId,
+      entity?.type === "character" ? 4 : 6,
+    );
     set({
       entities: {
         ...get().entities,

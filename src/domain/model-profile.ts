@@ -37,6 +37,70 @@ export interface ModelConnectionResult {
   message: string;
   model?: string;
 }
+export type ThinkingMode = "enabled" | "disabled";
+
+const RETRYABLE_HTTP_STATUS = new Set([408, 409, 425, 429, 500, 502, 503, 504]);
+
+export class ModelRequestError extends Error {
+  readonly retryable: boolean;
+
+  constructor(
+    readonly status: number,
+    readonly retryAfterMs: number | null = null,
+  ) {
+    super(`模型请求失败（HTTP ${status}）`);
+    this.name = "ModelRequestError";
+    this.retryable = RETRYABLE_HTTP_STATUS.has(status);
+  }
+}
+
+export function parseRetryAfterMs(
+  value: string | null,
+  now = Date.now(),
+): number | null {
+  if (!value) return null;
+  const seconds = Number(value);
+  if (Number.isFinite(seconds) && seconds >= 0) return seconds * 1000;
+  const time = Date.parse(value);
+  return Number.isFinite(time) ? Math.max(0, time - now) : null;
+}
+
+export function thinkingRequestBody(
+  baseUrl: string,
+  mode?: ThinkingMode,
+): Record<string, unknown> {
+  if (!mode) return {};
+  let host: string;
+  try {
+    host = new URL(baseUrl).hostname.toLowerCase();
+  } catch {
+    return {};
+  }
+  return host === "bigmodel.cn" || host.endsWith(".bigmodel.cn")
+    ? { thinking: { type: mode } }
+    : {};
+}
+
+export function chatCompletionsRequestBody(
+  profile: Pick<ModelProfile, "baseUrl" | "modelId">,
+  prompt: string,
+  options: {
+    maxOutputTokens: number;
+    temperature: number;
+    stream: boolean;
+    thinking?: ThinkingMode;
+  },
+): Record<string, unknown> {
+  return {
+    model: profile.modelId,
+    messages: [{ role: "user", content: prompt }],
+    max_tokens: options.maxOutputTokens,
+    temperature: options.temperature,
+    stream: options.stream,
+    ...(options.stream ? { stream_options: { include_usage: true } } : {}),
+    ...thinkingRequestBody(profile.baseUrl, options.thinking),
+  };
+}
 export const PROVIDER_PRESETS: Record<
   ModelProvider,
   { label: string; baseUrl: string; modelId: string; requiresKey: boolean }

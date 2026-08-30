@@ -64,6 +64,24 @@ export function estimateTokens(text: string): number {
   const rest = text.replace(/[\u3400-\u9fff\uf900-\ufaff\s]/g, "").length;
   return Math.max(text.trim() ? 1 : 0, Math.ceil(cjk * 1.05 + rest / 4));
 }
+export function selectRecentChapters(
+  chapters: Chapter[],
+  beforePosition: number,
+  candidateChain: Chapter[] = [],
+  limit = 2,
+): Chapter[] {
+  const byId = new Map(
+    chapters
+      .filter((item) => item.position < beforePosition && item.content.trim())
+      .map((item) => [item.id, item]),
+  );
+  for (const item of candidateChain)
+    if (item.position < beforePosition && item.content.trim())
+      byId.set(item.id, item);
+  return [...byId.values()]
+    .sort((a, b) => a.position - b.position)
+    .slice(-limit);
+}
 function fingerprint(text: string): string {
   let hash = 2166136261;
   for (let i = 0; i < text.length; i++) {
@@ -217,7 +235,7 @@ export function buildContextPack(input: ContextPackInput): ContextPack {
       label: "角色当前状态",
       priority: 86,
       required: false,
-      text: `${item.summary}\n位置：${item.location}；身体：${item.physical}；情绪：${item.emotional}\n目标：${item.goals.join("、")}\n已知：${item.knowledge.join("、")}\n物品：${item.inventory.join("、")}`,
+      text: `${item.summary}\n位置：${item.location}；身体：${item.physical}；情绪：${item.emotional}\n目标：${item.goals.join("、")}\n已知：${item.knowledge.join("、")}\n物品：${item.inventory.join("、")}\n技能：${item.skills.join("、")}`,
     })),
     ...input.recentChapters.map((item) => ({
       id: item.id,

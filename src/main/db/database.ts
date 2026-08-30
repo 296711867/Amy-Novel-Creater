@@ -11,6 +11,12 @@ import { createUsageRepository } from "./repositories/usage";
 import { createModelProfilesRepository } from "./repositories/model-profiles";
 import { createNamePoolRepository } from "./repositories/name-pools";
 import type { NamePool } from "@domain/name-pool";
+import { createPlanningWorkflowRepository } from "./repositories/planning-workflow";
+import { assertPlanningReady } from "@domain/planning-workflow";
+import { createPlanningRunsRepository } from "./repositories/planning-runs";
+import { createPlanningCyclesRepository } from "./repositories/planning-cycles";
+import type { GenerationPolicy } from "@domain/generation";
+import { createPlanningProposalsRepository } from "./repositories/planning-proposals";
 
 /**
  * Thin facade over the domain repositories. Public API signatures must stay
@@ -26,6 +32,10 @@ export class NovelDatabase {
   private readonly usage;
   private readonly profiles;
   private readonly namePools;
+  private readonly planningWorkflow;
+  private readonly planningRuns;
+  private readonly planningCycles;
+  private readonly planningProposals;
 
   private constructor(private readonly client: Client) {
     this.novels = createNovelsRepository(client);
@@ -37,6 +47,10 @@ export class NovelDatabase {
     this.usage = createUsageRepository(client);
     this.profiles = createModelProfilesRepository(client);
     this.namePools = createNamePoolRepository(client);
+    this.planningWorkflow = createPlanningWorkflowRepository(client);
+    this.planningRuns = createPlanningRunsRepository(client);
+    this.planningCycles = createPlanningCyclesRepository(client);
+    this.planningProposals = createPlanningProposalsRepository(client);
   }
 
   static async open(path: string): Promise<NovelDatabase> {
@@ -55,9 +69,57 @@ export class NovelDatabase {
   saveNamePool(pool: NamePool): Promise<NamePool> {
     return this.namePools.saveNamePool(pool);
   }
+  getPlanningWorkflow(novelId: string) {
+    return this.planningWorkflow.getPlanningWorkflow(novelId);
+  }
+  savePlanningWorkflow(
+    workflow: Parameters<typeof this.planningWorkflow.savePlanningWorkflow>[0],
+  ) {
+    return this.planningWorkflow.savePlanningWorkflow(workflow);
+  }
+  startPlanningRun(input: Parameters<typeof this.planningRuns.start>[0]) {
+    return this.planningRuns.start(input);
+  }
+  recordPlanningResponse(
+    id: string,
+    response: Parameters<typeof this.planningRuns.received>[1],
+  ) {
+    return this.planningRuns.received(id, response);
+  }
+  completePlanningRun(id: string) {
+    return this.planningRuns.complete(id);
+  }
+  failPlanningRun(id: string, error: string) {
+    return this.planningRuns.fail(id, error);
+  }
+  listPlanningRuns(novelId: string) {
+    return this.planningRuns.list(novelId);
+  }
+  listPlanningCycles(novelId: string) {
+    return this.planningCycles.list(novelId);
+  }
+  savePlanningCycle(input: Parameters<typeof this.planningCycles.save>[0]) {
+    return this.planningCycles.save(input);
+  }
+  listPlanningProposals(novelId: string) {
+    return this.planningProposals.list(novelId);
+  }
+  replacePlanningProposals(
+    ...args: Parameters<typeof this.planningProposals.replacePending>
+  ) {
+    return this.planningProposals.replacePending(...args);
+  }
+  updatePlanningProposalStatus(
+    ...args: Parameters<typeof this.planningProposals.updateStatus>
+  ) {
+    return this.planningProposals.updateStatus(...args);
+  }
 
   listNovels() {
     return this.novels.listNovels();
+  }
+  deleteNovel(id: string) {
+    return this.novels.deleteNovel(id);
   }
   importNovelProject(bundle: NovelProjectBundle) {
     return this.novels.importNovelProject(bundle);
@@ -67,6 +129,9 @@ export class NovelDatabase {
   }
   createNovel(input: Parameters<typeof this.novels.createNovel>[0]) {
     return this.novels.createNovel(input);
+  }
+  updateCycleSize(id: string, cycleSize: number) {
+    return this.novels.updateCycleSize(id, cycleSize);
   }
 
   listChapters(novelId: string) {
@@ -171,11 +236,46 @@ export class NovelDatabase {
   setCandidateStatus(id: string, status: "accepted" | "rejected") {
     return this.generation.setCandidateStatus(id, status);
   }
-  createGenerationBatch(
+  async createGenerationBatch(
     novelId: string,
-    policy: Parameters<typeof this.generation.createGenerationBatch>[1],
+    policy: GenerationPolicy,
   ) {
-    return this.generation.createGenerationBatch(novelId, policy);
+    const workflow = await this.getPlanningWorkflow(novelId);
+    if (!workflow.confirmedSteps.includes(9))
+      throw new Error("请先完成小说框架十步向导和一致性检查");
+    const novel = await this.getNovel(novelId);
+    if (!novel) throw new Error("作品不存在");
+    const [sections, entities, structure, chapters, cycles] = await Promise.all([
+      this.listBibleSections(novelId),
+      this.listStoryEntities(novelId),
+      this.listStoryStructure(novelId),
+      this.listChapters(novelId),
+      this.listPlanningCycles(novelId),
+    ]);
+    const cycle = cycles.find(
+      (item) =>
+        item.startChapter === policy.startChapter &&
+        item.endChapter === policy.endChapter &&
+        ["ready", "generating"].includes(item.status),
+    );
+    if (!cycle)
+      throw new Error(
+        `第 ${policy.startChapter}–${policy.endChapter} 章策划包尚未通过一致性检查`,
+      );
+    assertPlanningReady({
+      novel,
+      sections,
+      entities,
+      volumes: structure.volumes,
+      chapters,
+      range: {
+        startChapter: policy.startChapter,
+        endChapter: policy.endChapter,
+      },
+    });
+    const batch = await this.generation.createGenerationBatch(novelId, policy);
+    await this.savePlanningCycle({ ...cycle, status: "generating" });
+    return batch;
   }
   listGenerationBatches() {
     return this.generation.listGenerationBatches();

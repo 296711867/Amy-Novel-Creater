@@ -12,7 +12,12 @@ import {
   UserRound,
   WandSparkles,
 } from "lucide-react";
-import { Navigate, NavLink, useParams } from "react-router-dom";
+import {
+  Navigate,
+  NavLink,
+  useParams,
+  useSearchParams,
+} from "react-router-dom";
 import {
   BIBLE_SECTION_LABELS,
   CHARACTER_TIER_LABELS,
@@ -50,6 +55,7 @@ const EMPTY_ENTITIES: never[] = [];
 
 export function BiblePage(): React.JSX.Element {
   const { novelId = "" } = useParams(),
+    [searchParams] = useSearchParams(),
     novel = useNovelStore((s) => s.novels.find((item) => item.id === novelId)),
     sections = useNovelStore((s) => s.bibleSections[novelId] ?? EMPTY_SECTIONS),
     entities = useNovelStore((s) => s.entities[novelId] ?? EMPTY_ENTITIES);
@@ -58,9 +64,16 @@ export function BiblePage(): React.JSX.Element {
     loadEntities = useNovelStore((s) => s.loadEntities),
     saveEntity = useNovelStore((s) => s.saveEntity),
     deleteEntity = useNovelStore((s) => s.deleteEntity);
-  const [mode, setMode] = useState<"documents" | "entities">("documents"),
+  const requestedType = searchParams.get("type") as StoryEntityType | null;
+  const [mode, setMode] = useState<"documents" | "entities">(
+      searchParams.get("mode") === "entities" ? "entities" : "documents",
+    ),
     [sectionKind, setSectionKind] = useState<BibleSectionKind>("intent"),
-    [entityType, setEntityType] = useState<StoryEntityType>("character"),
+    [entityType, setEntityType] = useState<StoryEntityType>(
+      requestedType && entityTypes.includes(requestedType)
+        ? requestedType
+        : "character",
+    ),
     [content, setContent] = useState(""),
     [saveState, setSaveState] = useState("已保存"),
     [selectedId, setSelectedId] = useState<string | null>(null);

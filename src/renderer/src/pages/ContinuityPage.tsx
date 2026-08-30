@@ -69,6 +69,7 @@ export function ContinuityPage(): React.JSX.Element {
       knowledge: [],
       goals: [],
       inventory: [],
+      skills: [],
     });
   const [timelineForm, setTimelineForm] =
       useState<SaveTimelineEventInput>(emptyTimeline()),
@@ -523,6 +524,11 @@ export function ContinuityPage(): React.JSX.Element {
                 onChange={(inventory) =>
                   setStateForm({ ...stateForm, inventory })
                 }
+              />
+              <ListField
+                label="技能、能力与熟练度"
+                values={stateForm.skills}
+                onChange={(skills) => setStateForm({ ...stateForm, skills })}
               />
               <LedgerFooter
                 selected={selectedId}

@@ -50,8 +50,20 @@ import type {
   TimelineEvent,
 } from "@domain/continuity";
 import type { NovelProjectBundle } from "@domain/project-export";
+import type { ScopeAdvice } from "@domain/scope-advisor";
+import type { PlanningBrief } from "@domain/planning-workflow";
 import type { DiagnosticReport } from "@domain/diagnostics";
-import type { NovelPlanSummary, PlanPhase } from "@domain/planning";
+import type { NovelPlanSummary, PlanPhase, PlanRange } from "@domain/planning";
+import type { PlanningWorkflow } from "@domain/planning-workflow";
+import type { PlanningRun } from "@domain/planning-run";
+import type {
+  PlanningCycle,
+  SavePlanningCycleInput,
+} from "@domain/planning-cycle";
+import type {
+  PlanningProposal,
+  PlanningProposalStatus,
+} from "@domain/planning-proposal";
 
 export interface CreateNovelResult {
   novel: Novel;
@@ -61,13 +73,42 @@ export interface CreateNovelResult {
 export interface PlatformPort {
   readonly host: "electron" | "web";
   listNovels(): Promise<Novel[]>;
+  deleteNovel(novelId: string): Promise<void>;
   importNovelProject(bundle: NovelProjectBundle): Promise<Novel>;
   getDiagnostics(): Promise<DiagnosticReport>;
+  suggestNovelScope(input: {
+    title: string;
+    genre: string;
+    premise: string;
+    notes?: string;
+  }): Promise<ScopeAdvice>;
+  suggestPlanningBrief(input: {
+    title: string;
+    genre: string;
+    premise: string;
+    notes?: string;
+  }): Promise<PlanningBrief>;
   createNovel(input: CreateNovelInput): Promise<CreateNovelResult>;
+  updateNovelSettings(
+    novelId: string,
+    patch: { cycleSize: number },
+  ): Promise<Novel>;
+  getPlanningWorkflow(novelId: string): Promise<PlanningWorkflow>;
+  savePlanningWorkflow(workflow: PlanningWorkflow): Promise<PlanningWorkflow>;
   generateNovelPlan(
     novelId: string,
     phase: PlanPhase,
+    range?: PlanRange,
   ): Promise<NovelPlanSummary>;
+  listPlanningRuns(novelId: string): Promise<PlanningRun[]>;
+  listPlanningCycles(novelId: string): Promise<PlanningCycle[]>;
+  savePlanningCycle(input: SavePlanningCycleInput): Promise<PlanningCycle>;
+  listPlanningProposals(novelId: string): Promise<PlanningProposal[]>;
+  reviewPlanningProposal(
+    novelId: string,
+    proposalId: string,
+    status: Exclude<PlanningProposalStatus, "pending">,
+  ): Promise<PlanningProposal>;
   listChapters(novelId: string): Promise<Chapter[]>;
   getChapter(chapterId: string): Promise<Chapter | null>;
   saveChapter(input: SaveChapterInput): Promise<Chapter>;

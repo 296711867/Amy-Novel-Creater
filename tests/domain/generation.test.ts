@@ -4,6 +4,7 @@ import {
   canMoveJob,
   estimateGeneration,
   nextRunnableJob,
+  retryDelayMs,
   validateChapterRange,
   type GenerationJob,
   type GenerationPolicy,
@@ -64,5 +65,11 @@ describe("generation queue", () => {
   it("guards invalid state jumps", () => {
     expect(canMoveJob("queued", "building_context")).toBe(true);
     expect(canMoveJob("completed", "queued")).toBe(false);
+  });
+  it("backs off exponentially and honors Retry-After", () => {
+    expect(retryDelayMs(1)).toBe(1000);
+    expect(retryDelayMs(4)).toBe(8000);
+    expect(retryDelayMs(2, 45_000)).toBe(45_000);
+    expect(retryDelayMs(2, 999_000)).toBe(120_000);
   });
 });

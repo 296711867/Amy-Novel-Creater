@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { checkCandidateQuality } from "../../src/domain/quality-check";
+import {
+  assertCandidateAcceptedForCanon,
+  checkCandidateQuality,
+} from "../../src/domain/quality-check";
 const now = "2026-01-01T00:00:00.000Z",
   chapter = {
     id: "c",
@@ -15,6 +18,12 @@ const now = "2026-01-01T00:00:00.000Z",
     updatedAt: now,
   };
 describe("candidate quality check", () => {
+  it("blocks canon writes until the candidate is accepted", () => {
+    expect(() => assertCandidateAcceptedForCanon({ status: "candidate" })).toThrow(
+      "请先接受候选稿",
+    );
+    expect(() => assertCandidateAcceptedForCanon({ status: "accepted" })).not.toThrow();
+  });
   it("reports concrete omissions without inventing conflicts", () => {
     const findings = checkCandidateQuality({
       chapter,

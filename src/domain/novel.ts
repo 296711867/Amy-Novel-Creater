@@ -16,6 +16,8 @@ export interface Novel {
   targetWords: number;
   targetChapters: number;
   chapterWords: number;
+  /** 滚动规划每批章数；上限受规划 JSON 稳定性约束（实测 10 章约 3.5k 输出 token）。 */
+  cycleSize: number;
   status: NovelStatus;
   createdAt: string;
   updatedAt: string;
@@ -75,6 +77,20 @@ export interface CreateNovelInput {
   premise: string;
   targetChapters: number;
   chapterWords: number;
+  cycleSize?: number;
+}
+
+/** 滚动批次大小边界：过小则周期开销占比高，过大则规划 JSON 失败率上升。 */
+export const CYCLE_SIZE_MIN = 5;
+export const CYCLE_SIZE_MAX = 15;
+export const CYCLE_SIZE_DEFAULT = 10;
+
+export function normalizeCycleSize(value: number | null | undefined): number {
+  const parsed = Number(value);
+  // 空值、非数与非正数视为未设置，回退默认，而不是钳到下限。
+  if (value === null || value === undefined || !Number.isFinite(parsed) || parsed <= 0)
+    return CYCLE_SIZE_DEFAULT;
+  return Math.min(CYCLE_SIZE_MAX, Math.max(CYCLE_SIZE_MIN, Math.round(parsed)));
 }
 
 export function calculateTargetWords(

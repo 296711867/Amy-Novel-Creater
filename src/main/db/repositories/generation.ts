@@ -219,6 +219,10 @@ export function createGenerationRepository(
         createSnapshot: true,
         origin: "accepted",
       });
+      await client.execute({
+        sql: "UPDATE chapters SET status='accepted',updated_at=? WHERE id=?",
+        args: [new Date().toISOString(), chapter.id],
+      });
     }
     await client.execute({
       sql: "UPDATE chapter_candidates SET status=?,updated_at=? WHERE id=?",

@@ -9,7 +9,7 @@ import type { SaveSceneInput, SaveVolumeInput } from "@domain/story-structure";
 import type { ContextPack } from "@domain/context-pack";
 import type { SaveUsageInput } from "@domain/usage";
 import type { SaveModelProfileInput } from "@domain/model-profile";
-import type { PlanPhase } from "@domain/planning";
+import type { PlanPhase, PlanRange } from "@domain/planning";
 import type {
   GenerateChapterInput,
   GenerationProgress,
@@ -33,17 +33,59 @@ import type {
   SaveTimelineEventInput,
 } from "@domain/continuity";
 import type { NovelProjectBundle } from "@domain/project-export";
+import type { PlanningWorkflow } from "@domain/planning-workflow";
+import type { SavePlanningCycleInput } from "@domain/planning-cycle";
+import type { PlanningProposalStatus } from "@domain/planning-proposal";
 
 const api: AmyNovelApi = {
   host: "electron",
   getDiagnostics: () => ipcRenderer.invoke(IPC_CHANNELS.getDiagnostics),
+  suggestNovelScope: (input: {
+    title: string;
+    genre: string;
+    premise: string;
+    notes?: string;
+  }) => ipcRenderer.invoke(IPC_CHANNELS.suggestNovelScope, input),
+  suggestPlanningBrief: (input: {
+    title: string;
+    genre: string;
+    premise: string;
+    notes?: string;
+  }) => ipcRenderer.invoke(IPC_CHANNELS.suggestPlanningBrief, input),
   importNovelProject: (bundle: NovelProjectBundle) =>
     ipcRenderer.invoke(IPC_CHANNELS.importNovelProject, bundle),
   listNovels: () => ipcRenderer.invoke(IPC_CHANNELS.listNovels),
+  deleteNovel: (id: string) =>
+    ipcRenderer.invoke(IPC_CHANNELS.deleteNovel, id),
   createNovel: (input: CreateNovelInput) =>
     ipcRenderer.invoke(IPC_CHANNELS.createNovel, input),
-  generateNovelPlan: (novelId: string, phase: PlanPhase) =>
-    ipcRenderer.invoke(IPC_CHANNELS.generateNovelPlan, novelId, phase),
+  updateNovelSettings: (novelId: string, patch: { cycleSize: number }) =>
+    ipcRenderer.invoke(IPC_CHANNELS.updateNovelSettings, novelId, patch),
+  getPlanningWorkflow: (novelId: string) =>
+    ipcRenderer.invoke(IPC_CHANNELS.getPlanningWorkflow, novelId),
+  savePlanningWorkflow: (workflow: PlanningWorkflow) =>
+    ipcRenderer.invoke(IPC_CHANNELS.savePlanningWorkflow, workflow),
+  generateNovelPlan: (novelId: string, phase: PlanPhase, range?: PlanRange) =>
+    ipcRenderer.invoke(IPC_CHANNELS.generateNovelPlan, novelId, phase, range),
+  listPlanningRuns: (novelId: string) =>
+    ipcRenderer.invoke(IPC_CHANNELS.listPlanningRuns, novelId),
+  listPlanningCycles: (novelId: string) =>
+    ipcRenderer.invoke(IPC_CHANNELS.listPlanningCycles, novelId),
+  savePlanningCycle: (input: SavePlanningCycleInput) =>
+    ipcRenderer.invoke(IPC_CHANNELS.savePlanningCycle, input),
+  listPlanningProposals: (novelId: string) =>
+    ipcRenderer.invoke(IPC_CHANNELS.listPlanningProposals, novelId),
+  reviewPlanningProposal: (
+    novelId: string,
+    proposalId: string,
+    status: Exclude<PlanningProposalStatus, "pending">,
+  ) =>
+    ipcRenderer.invoke(
+      IPC_CHANNELS.reviewPlanningProposal,
+      novelId,
+      proposalId,
+      status,
+    ),
   listChapters: (novelId: string) =>
     ipcRenderer.invoke(IPC_CHANNELS.listChapters, novelId),
   getChapter: (chapterId: string) =>
