@@ -51,6 +51,7 @@ import type {
 } from "@domain/continuity";
 import type { NovelProjectBundle } from "@domain/project-export";
 import type { DiagnosticReport } from "@domain/diagnostics";
+import type { NovelPlanSummary, PlanPhase } from "@domain/planning";
 
 export interface CreateNovelResult {
   novel: Novel;
@@ -63,6 +64,10 @@ export interface PlatformPort {
   importNovelProject(bundle: NovelProjectBundle): Promise<Novel>;
   getDiagnostics(): Promise<DiagnosticReport>;
   createNovel(input: CreateNovelInput): Promise<CreateNovelResult>;
+  generateNovelPlan(
+    novelId: string,
+    phase: PlanPhase,
+  ): Promise<NovelPlanSummary>;
   listChapters(novelId: string): Promise<Chapter[]>;
   getChapter(chapterId: string): Promise<Chapter | null>;
   saveChapter(input: SaveChapterInput): Promise<Chapter>;

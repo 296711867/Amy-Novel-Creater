@@ -38,6 +38,14 @@ import type {
   SaveTimelineEventInput,
 } from "@domain/continuity";
 import { parseNovelProject } from "@domain/project-export";
+import {
+  biblePlanningPrompt,
+  parseBiblePlan,
+  parseStructurePlan,
+  structurePlanningPrompt,
+  type NovelPlanSummary,
+  type PlanPhase,
+} from "@domain/planning";
 
 export function registerNovelIpc(
   ipc: IpcMain,
@@ -65,6 +73,146 @@ export function registerNovelIpc(
   );
   ipc.handle(IPC_CHANNELS.createNovel, (_event, input: CreateNovelInput) =>
     database.createNovel(input),
+  );
+  ipc.handle(
+    IPC_CHANNELS.generateNovelPlan,
+    async (_event, novelId: string, phase: PlanPhase) => {
+      const novel = await database.getNovel(novelId);
+      if (!novel) throw new Error("作品不存在");
+      const profiles = await database.listModelProfiles(),
+        profile = profiles.find((item) => item.isDefault) ?? profiles[0];
+      if (!profile) throw new Error("请先在设置页配置默认写作模型");
+      const apiKey = await secrets.get(profile.id);
+      const bible = await database.listBibleSections(novelId);
+      const prompt =
+        phase === "bible"
+          ? biblePlanningPrompt(novel)
+          : structurePlanningPrompt(novel, bible);
+      // 规划是结构化输出任务，关闭思考以获得稳定 JSON 并节省 token。
+      const result = await streamOpenAICompatible(
+        profile,
+        apiKey,
+        prompt,
+        phase === "bible" ? 8000 : 24000,
+        0.7,
+        () => {},
+        fetch,
+        undefined,
+        "disabled",
+      );
+      await database.saveUsage({
+        novelId,
+        chapterId: null,
+        operation: "planning",
+        provider: profile.provider,
+        model: profile.modelId,
+        inputTokens: result.inputTokens || estimateTokens(prompt),
+        outputTokens: result.outputTokens || estimateTokens(result.content),
+        cachedTokens: result.cachedTokens,
+        cost: null,
+        measurement:
+          result.inputTokens || result.outputTokens ? "provider" : "estimated",
+      });
+      if (phase === "bible") {
+        const plan = parseBiblePlan(result.content);
+        for (const section of plan.sections)
+          await database.saveBibleSection({
+            novelId,
+            kind: section.kind,
+            content: section.content,
+          });
+        for (const item of [...plan.characters, ...plan.entities])
+          await database.saveStoryEntity({
+            novelId,
+            type: item.type,
+            name: item.name,
+            summary: item.summary,
+            aliases: item.aliases,
+            profile: item.profile,
+          });
+        const summary: NovelPlanSummary = {
+          phase,
+          sections: plan.sections.length,
+          entities: plan.characters.length + plan.entities.length,
+          volumes: 0,
+          chapters: 0,
+        };
+        return summary;
+      }
+      const plan = parseStructurePlan(result.content),
+        structure = await database.listStoryStructure(novelId),
+        chapters = await database.listChapters(novelId);
+      const volumeIds = new Map<string, string>();
+      const orderedIds: string[] = [];
+      for (const volume of plan.volumes) {
+        const existing = structure.volumes.find(
+          (item) => item.title === volume.title,
+        );
+        const saved = existing
+          ? ((await database.saveVolume({
+              id: existing.id,
+              novelId,
+              title: existing.title,
+              outline: volume.outline,
+            })) ?? existing)
+          : await database.saveVolume({
+              novelId,
+              title: volume.title,
+              outline: volume.outline,
+            });
+        volumeIds.set(volume.title, saved.id);
+        orderedIds.push(saved.id);
+      }
+      const orderedSet = new Set(orderedIds);
+      await database.reorderVolumes(novelId, [
+        ...orderedIds,
+        ...structure.volumes
+          .map((item) => item.id)
+          .filter((id) => !orderedSet.has(id)),
+      ]);
+      const defaultVolumeId = plan.volumes[0]
+        ? volumeIds.get(plan.volumes[0].title)!
+        : null;
+      for (const [index, chapter] of plan.chapters.entries()) {
+        const volumeId = chapter.volumeTitle
+          ? (volumeIds.get(chapter.volumeTitle) ?? defaultVolumeId)
+          : defaultVolumeId;
+        const slot = chapters.find((item) => item.position === index + 1);
+        if (slot)
+          await database.updateChapterPlan({
+            chapterId: slot.id,
+            volumeId,
+            title: chapter.title,
+            outline: chapter.outline,
+            targetWords: novel.chapterWords,
+          });
+        else
+          await database
+            .createChapter({
+              novelId,
+              volumeId,
+              title: chapter.title,
+              targetWords: novel.chapterWords,
+            })
+            .then(async (created) => {
+              await database.updateChapterPlan({
+                chapterId: created.id,
+                volumeId,
+                title: chapter.title,
+                outline: chapter.outline,
+                targetWords: novel.chapterWords,
+              });
+            });
+      }
+      const summary: NovelPlanSummary = {
+        phase,
+        sections: 0,
+        entities: 0,
+        volumes: plan.volumes.length,
+        chapters: plan.chapters.length,
+      };
+      return summary;
+    },
   );
   ipc.handle(IPC_CHANNELS.listChapters, (_event, novelId: string) =>
     database.listChapters(novelId),

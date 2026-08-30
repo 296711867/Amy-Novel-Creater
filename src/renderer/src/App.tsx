@@ -7,6 +7,7 @@ import {
   ChevronRight,
   Feather,
   Home,
+  Layers,
   Library,
   Pause,
   Play,
@@ -301,12 +302,33 @@ function NovelPlanPage(): React.JSX.Element {
   const novels = useNovelStore((s) => s.novels);
   const chaptersByNovel = useNovelStore((s) => s.chapters);
   const loadChapters = useNovelStore((s) => s.loadChapters);
+  const generateNovelPlan = useNovelStore((s) => s.generateNovelPlan);
+  const [planBusy, setPlanBusy] = useState<"bible" | "structure" | null>(null),
+    [planMessage, setPlanMessage] = useState("");
   const novel = novels.find((n) => n.id === novelId);
   const chapters = chaptersByNovel[novelId] ?? [];
   useEffect(() => {
     void loadChapters(novelId);
   }, [loadChapters, novelId]);
   if (!novel) return <Navigate to="/novels" replace />;
+  async function runPlan(phase: "bible" | "structure") {
+    setPlanBusy(phase);
+    setPlanMessage("");
+    try {
+      const summary = await generateNovelPlan(novelId, phase);
+      setPlanMessage(
+        phase === "bible"
+          ? `已生成故事圣经 ${summary.sections} 节、设定卡 ${summary.entities} 张，请打开故事圣经审核修改。`
+          : `已生成 ${summary.volumes} 卷、${summary.chapters} 章目录，请到卷章结构审核修改。`,
+      );
+    } catch (error) {
+      setPlanMessage(
+        `规划失败：${error instanceof Error ? error.message : "未知错误"}`,
+      );
+    } finally {
+      setPlanBusy(null);
+    }
+  }
   return (
     <main className="workspace">
       <header className="workspace-head">
@@ -357,6 +379,27 @@ function NovelPlanPage(): React.JSX.Element {
           <span className="kicker">STORY BLUEPRINT</span>
           <h2>让大故事先有骨架</h2>
           <p>{novel.premise || "还没有核心设定，可以先补充创作意图。"}</p>
+          <div className="plan-actions">
+            <button
+              className="primary"
+              disabled={planBusy !== null}
+              onClick={() => void runPlan("bible")}
+            >
+              <Sparkles size={16} />
+              {planBusy === "bible" ? "正在生成圣经…" : "AI 生成故事圣经与角色"}
+            </button>
+            <button
+              className="secondary"
+              disabled={planBusy !== null}
+              onClick={() => void runPlan("structure")}
+            >
+              <Layers size={16} />
+              {planBusy === "structure"
+                ? "正在规划卷章…"
+                : "AI 生成分卷与章节大纲"}
+            </button>
+          </div>
+          {planMessage && <div className="model-result">{planMessage}</div>}
           <div className="blueprint-grid">
             <article>
               <b>故事圣经</b>

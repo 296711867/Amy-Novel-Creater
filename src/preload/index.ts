@@ -9,6 +9,7 @@ import type { SaveSceneInput, SaveVolumeInput } from "@domain/story-structure";
 import type { ContextPack } from "@domain/context-pack";
 import type { SaveUsageInput } from "@domain/usage";
 import type { SaveModelProfileInput } from "@domain/model-profile";
+import type { PlanPhase } from "@domain/planning";
 import type {
   GenerateChapterInput,
   GenerationProgress,
@@ -41,6 +42,8 @@ const api: AmyNovelApi = {
   listNovels: () => ipcRenderer.invoke(IPC_CHANNELS.listNovels),
   createNovel: (input: CreateNovelInput) =>
     ipcRenderer.invoke(IPC_CHANNELS.createNovel, input),
+  generateNovelPlan: (novelId: string, phase: PlanPhase) =>
+    ipcRenderer.invoke(IPC_CHANNELS.generateNovelPlan, novelId, phase),
   listChapters: (novelId: string) =>
     ipcRenderer.invoke(IPC_CHANNELS.listChapters, novelId),
   getChapter: (chapterId: string) =>

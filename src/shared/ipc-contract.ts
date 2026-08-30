@@ -5,6 +5,7 @@ export const IPC_CHANNELS = {
   importNovelProject: "novels:import-project",
   getDiagnostics: "app:diagnostics",
   createNovel: "novels:create",
+  generateNovelPlan: "novels:plan:generate",
   listChapters: "chapters:list",
   getChapter: "chapters:get",
   saveChapter: "chapters:save",

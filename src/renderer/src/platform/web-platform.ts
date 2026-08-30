@@ -29,6 +29,13 @@ import type {
 import type { FactProposal, StoredFinding } from "@domain/quality-check";
 import { estimateTokens } from "@domain/context-pack";
 import {
+  biblePlanningPrompt,
+  parseBiblePlan,
+  parseStructurePlan,
+  structurePlanningPrompt,
+} from "@domain/planning";
+import type { PlanPhase } from "@domain/planning";
+import {
   estimateGeneration,
   type GenerationBatch,
   type GenerationJob,
@@ -276,6 +283,122 @@ export const webPlatform: PlatformPort = {
     write(NOVELS_KEY, [novel, ...novels]);
     write(chaptersKey(novel.id), chapters);
     return { novel, chapters };
+  },
+  async generateNovelPlan(novelId: string, phase: PlanPhase) {
+    const novel = read<Novel[]>(NOVELS_KEY, []).find(
+      (item) => item.id === novelId,
+    );
+    if (!novel) throw new Error("作品不存在");
+    const profile = read<ModelProfile[]>(PROFILES_KEY, []).find(
+      (item) => item.isDefault,
+    );
+    if (!profile) throw new Error("请先在设置页配置默认写作模型");
+    const key = sessionStorage.getItem(`amy-novel:secret:${profile.id}`) ?? "";
+    const bible = await this.listBibleSections(novelId);
+    const prompt =
+      phase === "bible"
+        ? biblePlanningPrompt(novel)
+        : structurePlanningPrompt(novel, bible);
+    // 浏览器直连模型受 CORS 限制，多数 provider 需要代理才能使用。
+    const response = await fetch(
+      `${profile.baseUrl.replace(/\/$/, "")}/chat/completions`,
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          ...(key ? { authorization: `Bearer ${key}` } : {}),
+        },
+        body: JSON.stringify({
+          model: profile.modelId,
+          messages: [{ role: "user", content: prompt }],
+          max_tokens: phase === "bible" ? 8000 : 24000,
+          temperature: 0.7,
+          thinking: { type: "disabled" },
+        }),
+      },
+    );
+    if (!response.ok)
+      throw new Error(`模型请求失败（HTTP ${response.status}）`);
+    const data = (await response.json()) as {
+      choices?: Array<{ message?: { content?: string } }>;
+    };
+    const content = data.choices?.[0]?.message?.content ?? "";
+    if (phase === "bible") {
+      const plan = parseBiblePlan(content);
+      for (const section of plan.sections)
+        await this.saveBibleSection({
+          novelId,
+          kind: section.kind,
+          content: section.content,
+        });
+      for (const item of [...plan.characters, ...plan.entities])
+        await this.saveStoryEntity({
+          novelId,
+          type: item.type,
+          name: item.name,
+          summary: item.summary,
+          aliases: item.aliases,
+          profile: item.profile,
+        });
+      return {
+        phase,
+        sections: plan.sections.length,
+        entities: plan.characters.length + plan.entities.length,
+        volumes: 0,
+        chapters: 0,
+      };
+    }
+    const plan = parseStructurePlan(content),
+      structure = await this.listStoryStructure(novelId),
+      chapters = await this.listChapters(novelId),
+      volumeIds = new Map<string, string>();
+    for (const volume of plan.volumes) {
+      const existing = structure.volumes.find(
+        (item) => item.title === volume.title,
+      );
+      const saved = await this.saveVolume(
+        existing
+          ? {
+              id: existing.id,
+              novelId,
+              title: existing.title,
+              outline: volume.outline,
+            }
+          : { novelId, title: volume.title, outline: volume.outline },
+      );
+      volumeIds.set(volume.title, saved.id);
+    }
+    const defaultVolumeId = plan.volumes[0]
+      ? (volumeIds.get(plan.volumes[0].title) ?? null)
+      : null;
+    for (const [index, chapter] of plan.chapters.entries()) {
+      const volumeId = chapter.volumeTitle
+        ? (volumeIds.get(chapter.volumeTitle) ?? defaultVolumeId)
+        : defaultVolumeId;
+      const slot = chapters.find((item) => item.position === index + 1);
+      const target =
+        slot ??
+        (await this.createChapter({
+          novelId,
+          volumeId,
+          title: chapter.title,
+          targetWords: novel.chapterWords,
+        }));
+      await this.updateChapterPlan({
+        chapterId: target.id,
+        volumeId,
+        title: chapter.title,
+        outline: chapter.outline,
+        targetWords: novel.chapterWords,
+      });
+    }
+    return {
+      phase,
+      sections: 0,
+      entities: 0,
+      volumes: plan.volumes.length,
+      chapters: plan.chapters.length,
+    };
   },
   async listChapters(novelId: string) {
     return read<Chapter[]>(chaptersKey(novelId), []).map((chapter) => ({

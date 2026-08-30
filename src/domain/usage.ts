@@ -4,7 +4,11 @@ export interface UsageRecord {
   novelId: string;
   chapterId: string | null;
   operation:
-    "context_build" | "generation" | "continuity_check" | "chapter_review";
+    | "context_build"
+    | "generation"
+    | "continuity_check"
+    | "chapter_review"
+    | "planning";
   provider: string;
   model: string;
   inputTokens: number;

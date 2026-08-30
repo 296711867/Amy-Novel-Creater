@@ -54,6 +54,7 @@ import {
   parseNovelProject,
   type NovelProjectBundle,
 } from "@domain/project-export";
+import type { NovelPlanSummary, PlanPhase } from "@domain/planning";
 
 interface NovelState {
   novels: Novel[];
@@ -78,6 +79,10 @@ interface NovelState {
   initialized: boolean;
   loadNovels(): Promise<void>;
   createNovel(input: CreateNovelInput): Promise<Novel>;
+  generateNovelPlan(
+    novelId: string,
+    phase: PlanPhase,
+  ): Promise<NovelPlanSummary>;
   loadChapters(novelId: string): Promise<Chapter[]>;
   getChapter(chapterId: string): Promise<Chapter | null>;
   saveChapter(input: SaveChapterInput): Promise<Chapter>;
@@ -197,6 +202,15 @@ export const useNovelStore = create<NovelState>((set, get) => ({
       chapters: { ...get().chapters, [result.novel.id]: result.chapters },
     });
     return result.novel;
+  },
+  async generateNovelPlan(novelId, phase) {
+    const summary = await platform.generateNovelPlan(novelId, phase);
+    await Promise.all([
+      get().loadChapters(novelId),
+      get().loadBible(novelId),
+      get().loadStructure(novelId),
+    ]);
+    return summary;
   },
   async loadChapters(novelId) {
     const cached = get().chapters[novelId];
