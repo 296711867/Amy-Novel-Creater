@@ -130,6 +130,7 @@ export class BatchRunner {
     signal: AbortSignal,
   ): Promise<StreamResult | null> {
     try {
+      // 辅助调用（事实提取 / 审查）只需要 JSON，思考纯浪费 token。
       return await streamOpenAICompatible(
         profile,
         apiKey,
@@ -139,6 +140,7 @@ export class BatchRunner {
         () => {},
         fetch,
         signal,
+        "disabled",
       );
     } catch (error) {
       if (signal.aborted) throw error;
@@ -225,6 +227,7 @@ export class BatchRunner {
         () => {},
         fetch,
         signal,
+        current.policy.deepThinking ? "enabled" : "disabled",
       );
       const inputTokens =
           result.inputTokens || estimateTokens(pack.renderedText),
@@ -267,11 +270,13 @@ export class BatchRunner {
           signal,
         );
         if (extraction) {
-          await this.database.saveFactProposals(
-            candidate.id,
-            chapter.id,
-            parseFactExtraction(extraction.content),
-          );
+          const proposals = safeParseProposals(extraction.content);
+          if (proposals)
+            await this.database.saveFactProposals(
+              candidate.id,
+              chapter.id,
+              proposals,
+            );
           await this.recordUsage(
             current,
             profile,
@@ -349,5 +354,13 @@ function safeParseReview(raw: string) {
     return parseChapterReview(raw);
   } catch {
     return [];
+  }
+}
+function safeParseProposals(raw: string) {
+  try {
+    return parseFactExtraction(raw);
+  } catch {
+    // 模型偶发返回非法 JSON 时跳过提案，不影响已生成的候选稿。
+    return null;
   }
 }

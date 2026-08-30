@@ -86,16 +86,22 @@ export function DataPage(): React.JSX.Element {
     <main className="page narrow">
       <div className="page-heading">
         <div>
-          <span className="kicker">EXPORT & BACKUP</span>
+          <span className="kicker">EXPORT &amp; BACKUP</span>
           <h1>导出与备份</h1>
           <p>导出可阅读正文，或保存包含创作资料与历史记录的项目数据包。</p>
         </div>
         <button className="secondary" onClick={diagnostics}>
-          <Stethoscope size={16} />
-          导出诊断
+          <Stethoscope size={15} />
+          导出诊断报告
         </button>
       </div>
       <section className="form-card">
+        <header className="card-head">
+          <div>
+            <h2>导出</h2>
+            <p>正文导出为通用格式，数据包用于备份与迁移。</p>
+          </div>
+        </header>
         <label>
           选择作品
           <select
@@ -113,41 +119,35 @@ export function DataPage(): React.JSX.Element {
             ))}
           </select>
         </label>
-        <div className="action-grid">
-          <button
-            className="action-card sand"
-            disabled={!novel}
-            onClick={() => manuscript("txt")}
-          >
-            <FileText />
+        <div className="export-actions">
+          <button disabled={!novel} onClick={() => manuscript("txt")}>
+            <FileText size={18} />
             <b>导出 TXT</b>
             <span>纯正文，适合阅读和平台投稿</span>
           </button>
-          <button
-            className="action-card rose"
-            disabled={!novel}
-            onClick={() => manuscript("md")}
-          >
-            <Download />
+          <button disabled={!novel} onClick={() => manuscript("md")}>
+            <Download size={18} />
             <b>导出 Markdown</b>
             <span>保留标题层级和章节分隔</span>
           </button>
-          <button
-            className="action-card orange"
-            disabled={!novel || busy}
-            onClick={project}
-          >
-            <Archive />
+          <button disabled={!novel || busy} onClick={project}>
+            <Archive size={18} />
             <b>{busy ? "正在整理…" : "备份项目数据包"}</b>
-            <span>章节、版本、故事圣经、正史、候选稿与 Token 记录</span>
+            <span>章节、版本、圣经、正史、候选稿与用量</span>
           </button>
         </div>
-        <hr />
-        <h2>恢复项目数据包</h2>
-        <p>恢复会创建一本带“（恢复）”后缀的新作品，不会覆盖书架中的原作品。</p>
-        <label className="primary">
-          <Upload size={16} />
-          {busy ? "正在恢复…" : "选择 .amy-novel.json"}
+        {message && <div className="model-result">{message}</div>}
+      </section>
+      <section className="form-card">
+        <header className="card-head">
+          <div>
+            <h2>恢复项目数据包</h2>
+            <p>恢复会创建一本带“（恢复）”后缀的新作品，不会覆盖原作品。</p>
+          </div>
+        </header>
+        <label className="upload-zone">
+          <Upload size={17} />
+          {busy ? "正在恢复…" : "选择 .amy-novel.json 数据包"}
           <input
             hidden
             type="file"
@@ -160,10 +160,9 @@ export function DataPage(): React.JSX.Element {
             }}
           />
         </label>
-        {message && <div className="model-result">{message}</div>}
         <small>
-          项目数据包不包含模型 API Key；旧生成任务不会恢复，候选稿和 Token
-          历史会保留。
+          项目数据包不包含模型 API Key；旧生成任务不会恢复，候选稿和
+          Token 历史会保留。
         </small>
       </section>
     </main>

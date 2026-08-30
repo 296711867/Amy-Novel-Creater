@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   streamOpenAICompatible,
   testOpenAICompatible,
+  thinkingRequestBody,
 } from "../../src/main/model/openai-compatible";
 
 const profile = {
@@ -75,5 +76,22 @@ describe("OpenAI-compatible adapter", () => {
       outputTokens: 8,
       cachedTokens: 20,
     });
+  });
+});
+
+describe("thinkingRequestBody", () => {
+  it("emits thinking param only for bigmodel.cn hosts", async () => {
+    expect(
+      thinkingRequestBody("https://open.bigmodel.cn/api/paas/v4", "disabled"),
+    ).toEqual({
+      thinking: { type: "disabled" },
+    });
+    expect(thinkingRequestBody("https://open.bigmodel.cn/api/paas/v4")).toEqual(
+      {},
+    );
+    expect(
+      thinkingRequestBody("https://api.openai.com/v1", "disabled"),
+    ).toEqual({});
+    expect(thinkingRequestBody("not a url", "disabled")).toEqual({});
   });
 });

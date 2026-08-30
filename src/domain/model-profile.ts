@@ -1,5 +1,10 @@
 export type ModelProvider =
-  "openai-compatible" | "openai" | "deepseek" | "glm" | "ollama";
+  | "openai-compatible"
+  | "openai"
+  | "deepseek"
+  | "glm"
+  | "glm-standard"
+  | "ollama";
 export interface ModelProfile {
   id: string;
   name: string;
@@ -55,7 +60,15 @@ export const PROVIDER_PRESETS: Record<
     requiresKey: true,
   },
   glm: {
-    label: "智谱 GLM",
+    label: "智谱 GLM（Coding Plan 订阅）",
+    // GLM Coding Plan 订阅 Key 只能走 /api/coding/paas/v4。
+    baseUrl: "https://open.bigmodel.cn/api/coding/paas/v4",
+    modelId: "GLM-5.2",
+    requiresKey: true,
+  },
+  "glm-standard": {
+    label: "智谱 GLM（按量付费 API）",
+    // 普通按量付费 API Key 走标准端点，模型按账号可用型号填写。
     baseUrl: "https://open.bigmodel.cn/api/paas/v4",
     modelId: "glm-4.6",
     requiresKey: true,

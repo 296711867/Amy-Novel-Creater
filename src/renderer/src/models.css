@@ -1,1 +1,33 @@
-.settings-page{max-width:1180px}.models-layout{display:grid;grid-template-columns:280px 1fr;gap:18px;margin-top:22px}.models-layout>aside,.model-editor{border:1px solid var(--border);border-radius:16px;background:var(--surface)}.models-layout>aside{padding:13px}.models-layout>aside header{display:flex;align-items:center;justify-content:space-between;padding:8px}.models-layout>aside header button{border:0;border-radius:8px;background:var(--muted);padding:7px}.models-layout>aside>button{width:100%;display:flex;align-items:center;gap:10px;border:0;background:transparent;padding:11px;border-radius:9px;text-align:left}.models-layout>aside>button.active{background:var(--accent2)}.models-layout>aside span{min-width:0;flex:1}.models-layout>aside b,.models-layout>aside small{display:block}.models-layout>aside small{color:var(--sub);margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.models-layout>aside i{width:8px;height:8px;border-radius:50%;background:var(--border)}.models-layout>aside i.ready{background:#4ca56a}.model-editor{padding:30px}.model-editor h2{font-size:29px;margin:8px 0 25px}.model-editor label{display:grid;gap:8px;font-weight:700;margin-bottom:18px}.model-editor input,.model-editor select{border:1px solid var(--border);border-radius:10px;background:var(--bg);padding:11px}.model-editor small{font-weight:400;color:var(--sub)}.model-row{display:grid;grid-template-columns:1fr 1fr;gap:14px}.default-check{display:flex!important;grid-template-columns:auto 1fr!important;align-items:center}.default-check input{width:17px;height:17px}.model-result{display:flex;align-items:center;gap:7px;padding:11px;background:var(--muted);border-radius:9px;color:var(--accent)}.model-editor footer{display:flex;justify-content:space-between;margin-top:25px;padding-top:20px;border-top:1px solid var(--border)}.model-editor footer>div{display:flex;gap:9px}@media(max-width:800px){.models-layout{grid-template-columns:1fr}.model-row{grid-template-columns:1fr}}
+/* 设置页 · 模型配置区。尺寸一律引用 styles.css :root 设计令牌。 */
+.settings-page{max-width:1040px}
+.models-layout{display:grid;grid-template-columns:248px minmax(0,1fr);gap:16px;margin-top:16px}
+.models-layout>aside,.model-editor{border:1px solid var(--border);border-radius:var(--radius-lg);background:var(--surface);overflow:hidden}
+/* 左侧 Profile 列表 */
+.models-layout>aside{display:flex;flex-direction:column}
+.models-layout>aside header{display:flex;align-items:center;justify-content:space-between;padding:10px 14px;background:var(--muted);border-bottom:1px solid var(--border);font-size:13px;font-weight:700}
+.models-layout>aside header button{display:grid;place-items:center;border:0;border-radius:var(--radius-sm);background:var(--surface);color:var(--accent);width:26px;height:26px}
+.models-layout>aside header button:hover{background:var(--accent);color:#fff}
+.models-layout>aside>button{width:100%;display:flex;align-items:center;gap:10px;border:0;background:transparent;padding:9px 10px;border-radius:var(--radius-sm);text-align:left}
+.models-layout>aside>button:hover{background:var(--muted)}
+.models-layout>aside>button.active{background:var(--accent2)}
+.models-layout>aside>button svg{flex:none;color:var(--sub)}
+.models-layout>aside>button.active svg{color:var(--accent)}
+.models-layout>aside>button span{min-width:0;flex:1}
+.models-layout>aside b{display:block;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.models-layout>aside small{display:block;color:var(--sub);font-size:var(--fs-small);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.models-layout>aside i{width:8px;height:8px;border-radius:50%;background:var(--border);flex:none}
+.models-layout>aside i.ready{background:#4ca56a}
+/* 右侧编辑器 */
+.model-editor{padding:18px 20px 20px}
+.model-editor>.kicker{margin-bottom:2px}
+.model-editor h2{font-size:var(--fs-h2);margin:4px 0 14px}
+.model-editor label{display:grid;gap:var(--gap-field);font-weight:600;font-size:13px;margin-bottom:12px}
+.model-editor input,.model-editor select{border:1px solid var(--border);border-radius:var(--radius-md);background:var(--bg);padding:var(--pad-control);font-weight:400;width:100%}
+.model-editor small{font-weight:400;color:var(--sub);font-size:var(--fs-small)}
+.model-row{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.default-check{display:flex!important;grid-template-columns:auto 1fr!important;align-items:center;gap:8px}
+.default-check input{width:16px;height:16px}
+.model-result{display:flex;align-items:center;gap:7px;padding:9px 11px;background:var(--muted);border-radius:var(--radius-sm);color:var(--accent);font-size:13px}
+.model-editor footer{display:flex;justify-content:space-between;align-items:center;margin-top:14px;padding-top:14px;border-top:1px solid var(--border)}
+.model-editor footer>div{display:flex;gap:8px}
+@media(max-width:800px){.models-layout{grid-template-columns:1fr}.model-row{grid-template-columns:1fr}}

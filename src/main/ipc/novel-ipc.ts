@@ -187,6 +187,7 @@ export function registerNovelIpc(
           (delta) => emit({ type: "delta", delta }),
           fetch,
           controller.signal,
+          "disabled",
         );
         const inputTokens =
             result.inputTokens || estimateTokens(input.contextText),

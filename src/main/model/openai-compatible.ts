@@ -14,6 +14,26 @@ export interface StreamResult {
   outputTokens: number;
   cachedTokens: number;
 }
+export type ThinkingMode = "enabled" | "disabled";
+// GLM-4.5+ 是混合推理模型，默认开启深度思考（消耗大量输出 token 且计入
+// max_tokens 总预算）。`thinking` 参数是智谱私有扩展，其他严格的
+// OpenAI 兼容服务（如 OpenAI 官方）会因未知参数返回 400，所以只对
+// bigmodel.cn 域名下发。
+export function thinkingRequestBody(
+  baseUrl: string,
+  mode?: ThinkingMode,
+): Record<string, unknown> {
+  if (!mode) return {};
+  let host: string;
+  try {
+    host = new URL(baseUrl).hostname.toLowerCase();
+  } catch {
+    return {};
+  }
+  return host === "bigmodel.cn" || host.endsWith(".bigmodel.cn")
+    ? { thinking: { type: mode } }
+    : {};
+}
 export async function testOpenAICompatible(
   profile: ModelProfile,
   apiKey: string,
@@ -37,12 +57,22 @@ export async function testOpenAICompatible(
         }),
       },
     );
-    if (!response.ok)
+    if (!response.ok) {
+      let detail = "";
+      try {
+        const body = (await response.json()) as {
+          error?: { message?: string; code?: string | number };
+        };
+        detail = body.error?.message ? `：${body.error.message}` : "";
+      } catch {
+        /* Non-JSON error body. */
+      }
       return {
         ok: false,
         latencyMs: Date.now() - started,
-        message: `连接失败（HTTP ${response.status}）`,
+        message: `连接失败（HTTP ${response.status}${detail}）`,
       };
+    }
     const data = (await response.json()) as CompatibleResponse;
     if (!data.choices?.[0]?.message)
       return {
@@ -74,6 +104,7 @@ export async function streamOpenAICompatible(
   onDelta: (delta: string) => void,
   fetcher: typeof fetch = fetch,
   signal?: AbortSignal,
+  thinking?: ThinkingMode,
 ): Promise<StreamResult> {
   const response = await fetcher(normalizeChatCompletionsUrl(profile.baseUrl), {
     method: "POST",
@@ -88,6 +119,7 @@ export async function streamOpenAICompatible(
       temperature,
       stream: true,
       stream_options: { include_usage: true },
+      ...thinkingRequestBody(profile.baseUrl, thinking),
     }),
     signal,
   });

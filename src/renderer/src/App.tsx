@@ -418,6 +418,7 @@ function GeneratePage(): React.JSX.Element {
     approvalMode: "candidate",
     outputTokenBudget: 120000,
     concurrency: 1,
+    deepThinking: false,
   });
   const estimate = useMemo(() => estimateGeneration(policy), [policy]);
   if (!novel) return <Navigate to="/novels" replace />;
@@ -434,8 +435,8 @@ function GeneratePage(): React.JSX.Element {
       </div>
       <h1>配置批量生成任务</h1>
       <p className="lead">
-        任务将逐章执行。可以暂停、恢复或重试，不会因一次 Token
-        不足丢失整批结果。
+        任务按章节顺序执行，可设置并发加速。支持暂停、恢复与失败重试，不会因一次
+        Token 不足丢失整批结果。
       </p>
       <section className="form-card">
         <div className="form-row">
@@ -479,6 +480,23 @@ function GeneratePage(): React.JSX.Element {
             className={policy.continuityCheck ? "switch on" : "switch"}
             onClick={() =>
               setPolicy({ ...policy, continuityCheck: !policy.continuityCheck })
+            }
+          >
+            <i />
+          </button>
+        </div>
+        <div className="switch-row">
+          <div>
+            <b>深度思考写作</b>
+            <span>
+              GLM 等混合推理模型先思考再写正文，质量更好但更慢更费 token；关闭时
+              max_tokens 全部留给正文
+            </span>
+          </div>
+          <button
+            className={policy.deepThinking ? "switch on" : "switch"}
+            onClick={() =>
+              setPolicy({ ...policy, deepThinking: !policy.deepThinking })
             }
           >
             <i />

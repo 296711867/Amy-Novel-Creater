@@ -68,6 +68,10 @@ export function SettingsPage(): React.JSX.Element {
     try {
       const value = await store.testModelConnection(selected, form.apiKey);
       setResult(`${value.message} · ${value.latencyMs} ms`);
+    } catch (error) {
+      setResult(
+        `测试失败：${error instanceof Error ? error.message : "未知错误"}`,
+      );
     } finally {
       setBusy(false);
     }
@@ -78,11 +82,16 @@ export function SettingsPage(): React.JSX.Element {
         <div>
           <span className="kicker">PREFERENCES & MODELS</span>
           <h1>设置</h1>
-          <p>主题延续 Amy-PPT；模型配置按 Profile 隔离，可为不同任务切换。</p>
+          <p>五套界面主题可切换；模型配置按 Profile 隔离，可为不同任务切换不同模型。</p>
         </div>
       </div>
       <section className="form-card">
-        <h2>界面主题</h2>
+        <header className="card-head">
+          <div>
+            <h2>界面主题</h2>
+            <p>选择工作台配色，即时生效并本地记忆。</p>
+          </div>
+        </header>
         <div className="theme-grid">
           {themes.map((t) => (
             <button
@@ -224,6 +233,9 @@ export function SettingsPage(): React.JSX.Element {
               {result}
             </div>
           )}
+          {!result && !selected && (
+            <small>先点击「保存配置」创建模型，才能测试连接。</small>
+          )}
           <footer>
             {selected ? (
               <button
@@ -243,7 +255,7 @@ export function SettingsPage(): React.JSX.Element {
             <div>
               <button
                 className="secondary"
-                disabled={!selected || busy}
+                disabled={busy}
                 onClick={test}
               >
                 {busy ? "测试中…" : "测试连接"}

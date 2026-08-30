@@ -88,6 +88,8 @@ export interface GenerationPolicy {
   outputTokenBudget: number;
   /** 并发生成的章节数（1–3）。候选稿模式下章节彼此独立，可安全并行。 */
   concurrency?: number;
+  /** 正文生成是否启用 GLM 深度思考（默认关闭：更快，且 max_tokens 全部留给正文）。 */
+  deepThinking?: boolean;
 }
 
 export interface GenerationEstimate {
