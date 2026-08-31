@@ -4,6 +4,14 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#fff8f2" />
+    <!--
+      AN-012 CSP（Electron 渲染层）：模型调用全部经 IPC 由主进程发起，
+      渲染层不需要任何网络连接，connect-src 只留开发服务器 HMR。
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' ws://localhost:*"
+    />
     <title>Amy Novel</title>
   </head>
   <body>

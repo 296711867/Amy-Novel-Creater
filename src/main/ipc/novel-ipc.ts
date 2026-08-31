@@ -86,12 +86,24 @@ import {
   personaRecommendationMaxOutputTokens,
   personaRecommendationPrompt,
 } from "@domain/persona-recommendation";
+import { validateIpcArgs } from "./ipc-guard";
+import { IPC_WRITE_GUARDS } from "./ipc-write-guards";
 
 export function registerNovelIpc(
-  ipc: IpcMain,
+  rawIpc: IpcMain,
   database: NovelDatabase,
   secrets: SecretVault,
 ): void {
+  // AN-012 信任边界：所有 invoke 参数先过写通道守卫表，再进 handler。
+  // 校验失败以 rejected promise 返回渲染层；不记录参数值（可能含密钥）。
+  const ipc = {
+    handle: (channel: string, handler: (...args: unknown[]) => unknown) =>
+      rawIpc.handle(channel, (_event, ...args: unknown[]) => {
+        const guards = IPC_WRITE_GUARDS[channel];
+        if (guards) validateIpcArgs(channel, guards, args);
+        return handler(_event, ...args);
+      }),
+  } as unknown as IpcMain;
   const activeGenerations = new Map<string, AbortController>();
   // 生成过程事件：先落库（harness 可回溯），再广播给所有渲染窗口。
   const broadcastEvent = (event: GenerationEvent) => {

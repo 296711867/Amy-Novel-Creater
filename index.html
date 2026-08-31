@@ -4,6 +4,15 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#fff8f2" />
+    <!--
+      AN-012 CSP：脚本只允许自身（无 unsafe-eval/inline）；connect-src 放开
+      https: 与本机端口，因为 Web 模式由渲染进程直连用户配置的模型端点
+      （含本地 Ollama）；ws 仅限开发服务器 HMR。
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' https: http://localhost:* http://127.0.0.1:* ws://localhost:*"
+    />
     <title>Amy Novel</title>
   </head>
   <body>

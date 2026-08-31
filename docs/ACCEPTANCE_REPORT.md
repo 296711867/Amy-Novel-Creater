@@ -350,3 +350,28 @@ jsdom + fake-indexeddb）运行。覆盖：`ready()` 就绪门、小说创建/�
 该规则两端一致执行。双端 14 项契约用例通过；`pnpm verify` 通过：29 个测试文件、
 132 项测试通过，双端生产构建通过。契约套件位置与维护规则已写入
 `DEVELOPMENT_GUIDE.md`。
+
+## 2026-08-31 AN-012 IPC 运行时校验与 Electron 导航安全
+
+**IPC 信任边界**：`registerNovelIpc` 入口对全部 `ipc.handle` 做单点包裹，写通道参数
+先经 `ipc-write-guards.ts` 守卫表（约 50 个通道：小说/章节/结构/圣经/连续性/批次/
+工作流运行/文风模板，以及直接产生付费调用的单章生成）。守卫只做类型与形状检查
+（非空 ID、数值区间、封闭枚举、数组元素），不重建对象、不记录参数值（密钥与正文
+永不进入日志）；校验失败以 rejected promise 返回渲染层并带通道名与原因。守卫形状
+与 Domain 输入类型逐一核对（createChapter/SaveVolume/SaveScene 无 position、
+characterState.chapterId 可空等），避免过度限制正常调用。
+
+**导航安全**：`window-security.ts` 把决策做成纯函数——窗口内只允许应用自身页面
+（开发服务器 origin 或生产 renderer 目录的 file:// 前缀，带分隔符防同前缀目录逃逸），
+`setWindowOpenHandler` 一律拒绝新窗口、http(s) 外链转交系统浏览器；`will-navigate`
+拦截一切非应用导航。窗口原本已具备 sandbox + contextIsolation。
+
+**CSP**：双端入口分别配置——Electron 渲染层（`src/renderer/index.html`）零网络
+（connect-src 仅开发 HMR），Web 入口（`index.html`）放开 https: 与本机端口供渲染
+进程直连用户配置的模型端点；脚本源均只允许自身，无 unsafe-eval/inline。测试同时
+断言源文件与 `pnpm verify` 的双端构建产物（out/renderer、dist-web）均含 CSP。
+
+测试：守卫表键完整性、原型污染/枚举伪造/数值越界拒绝、合法参数与密钥字段放行、
+导航前缀与逃逸、新窗口决策、双端 CSP 差异共 9 项通过；`pnpm verify` 通过
+（30 个测试文件、141 项测试，双端生产构建）。开发模式 HMR 的 CSP 实机表现待下次
+`pnpm dev` 冒烟确认。

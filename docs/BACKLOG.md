@@ -31,7 +31,7 @@ AN-022 复用现有规划器和 BatchRunner，三档检查点、持久化恢复�
 | --- | --- | --- | --- | --- |
 | AN-010 | [ ] | Renderer 关键流程测试 | 当前没有 Renderer 测试目录；规划向导、候选审核和跨页状态主要靠人工回归 | 至少覆盖规划门禁、候选接受/事实审核、生成中切页恢复三个流程 |
 | AN-011 | [x] | PlatformPort 双端契约测试 | `tests/contract/platform-port.contract.ts` 同一组 7 项用例分别驱动 Electron（NovelDatabase，经 novel-ipc 同款方法映射）与 Web（webPlatform + IndexedDB）：ready 门、cycleSize 归一化、CJK 字数与版本快照、第 9 步门禁错误语义、workflow run DTO、文风模板、项目包导入与短引用重映射 | 双端 14 项契约用例通过（并验证孤儿提案按 cycleId 过滤的规则两端一致）；`pnpm verify` 通过（132 项测试） |
-| AN-012 | [ ] | IPC 运行时校验和 Electron 导航安全 | IPC 多数仅有 TypeScript 类型；HTML 未配置 CSP，窗口未显式限制导航/新窗口 | 写操作参数运行时校验；CSP、will-navigate、setWindowOpenHandler 策略到位；安全测试/检查通过 |
+| AN-012 | [x] | IPC 运行时校验和 Electron 导航安全 | `registerNovelIpc` 入口统一包裹写通道守卫表（ipc-guard 组合子 + ipc-write-guards，约 50 个写通道含付费生成调用）；`window-security.ts` 纯函数策略接入 will-navigate / setWindowOpenHandler（外链转系统浏览器）；双端入口 html 配置差异化 CSP（Electron 渲染层零网络，Web 放开模型端点） | 守卫表完整性、类型攻击拒绝、导航前缀逃逸、新窗口决策与双端 CSP 断言共 9 项测试通过；`pnpm verify` 通过且双端构建产物含 CSP |
 | AN-013 | [ ] | 拆分前端热点文件并按路由懒加载 | `web-platform.ts`、`novel-store.ts`、`PlanningWorkflowPage.tsx` 均超过 1,200 行；页面静态导入；Web 主包约 537KB | 先按现有业务边界拆分；路由懒加载；构建无 500KB 主包警告；行为测试不退化 |
 | AN-014 | [ ] | 建立可重复 CI | 本地已有 `pnpm check` / `pnpm verify`，仓库暂无 CI 工作流 | PR/推送运行 check；发布分支运行双构建；缓存 pnpm；失败阻止合并 |
 | AN-015 | [!] | Windows 商业签名与自动更新 | 需要证书和发布源，不属于仓库内可独立完成事项 | 用户提供证书/发布渠道后，签名安装包和更新回滚冒烟通过 |

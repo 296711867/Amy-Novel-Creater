@@ -1,10 +1,16 @@
-import { app, BrowserWindow } from "electron";
+import { app, BrowserWindow, shell } from "electron";
 import { electronApp, is } from "@electron-toolkit/utils";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { registerNovelIpc } from "./ipc/novel-ipc";
 import { ipcMain } from "electron";
 import { NovelDatabase } from "./db/database";
 import { SecretVault } from "./security/secret-vault";
+import {
+  appNavigationBase,
+  isAllowedNavigation,
+  windowOpenDecision,
+} from "./window-security";
 
 function createWindow(): void {
   const window = new BrowserWindow({
@@ -22,6 +28,23 @@ function createWindow(): void {
       sandbox: true,
       contextIsolation: true,
     },
+  });
+  // AN-012 导航安全：窗口内只允许应用自身页面；外部链接交给系统浏览器。
+  const navigationBase = () =>
+    appNavigationBase({
+      isDev: is.dev,
+      devServerUrl: process.env.ELECTRON_RENDERER_URL,
+      rendererDirFileUrl: pathToFileURL(
+        join(__dirname, "../renderer/"),
+      ).href,
+    });
+  window.webContents.setWindowOpenHandler(({ url }) => {
+    const decision = windowOpenDecision(url, navigationBase());
+    if (decision.openExternally) void shell.openExternal(url);
+    return { action: "deny" };
+  });
+  window.webContents.on("will-navigate", (event, url) => {
+    if (!isAllowedNavigation(url, navigationBase())) event.preventDefault();
   });
   window.on("ready-to-show", () => window.show());
   if (is.dev && process.env.ELECTRON_RENDERER_URL)
