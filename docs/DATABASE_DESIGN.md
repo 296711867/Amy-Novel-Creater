@@ -1,5 +1,8 @@
 # 数据库设计
 
+> 当前物理 Schema 以 `src/main/db/migrations.ts` 为准。本文同时保留目标模型；尚未落库的
+> 表和索引会明确标为“规划”，不能据此宣称功能已经实现。
+
 ## 1. 存储原则
 
 - SQLite 是桌面版结构化状态与索引的事实源。
@@ -37,13 +40,17 @@ novels 1─N volumes 1─N chapters 1─N scenes
 - `chapter_versions(id, chapter_id, version_no, origin, content, word_count, content_hash, accepted_at)`
 - `chapter_candidates(id, chapter_id, generation_job_id, content, status, base_version_id)`
 - `planning_workflows(novel_id, brief_json, confirmed_steps_json, updated_at)`
+- `workflow_runs(id, novel_id, mode, current_phase, status, checkpoint, config_json, attempt, batch_id, error, created_at, updated_at)`
 
-`planning_workflows` 保存作者原始创作简报与十步向导的连续确认列表。它不是自动运行记录；
-未来后台 Autopilot 使用独立的 `workflow_runs`，避免把人工审核状态和执行状态混在一起。
+`planning_workflows` 保存作者原始创作简报与十步向导的连续确认列表；`workflow_runs`
+保存 Autopilot 后台运行状态（三档模式、当前阶段、运行/暂停/失败/完成、等待作者的
+检查点、批次策略与重试配置、阶段重试计数、挂接的正文批次、错误信息），两者不混用，
+避免把人工审核状态和执行状态混在一起。删除作品时运行记录级联清理。
 
 当前滚动策划已使用：
 
-- `planning_runs`：模型、阶段、章节范围、Prompt 哈希、原始响应、Token、状态与错误；
+- `planning_runs`：模型、阶段、章节范围、Prompt 哈希、原始响应、一次低温修复响应、累计 Token、状态与错误；
+- `planning_proposals`：周期/全局提案、稳定 `target_ref`、补丁、审核状态；旧项目导入时引用随实体新 ID 重映射；
 - `planning_cycles`：十章范围、周期状态、目标、开场、高潮、预期和实际结束状态；
 - `planning_proposals`：前置实体设定的新增/更新候选、原因与审核状态。
 
@@ -85,15 +92,16 @@ novels 1─N volumes 1─N chapters 1─N scenes
 
 ## 4. 索引
 
-- `(volume_id, position)`、`(chapter_id, version_no)` 唯一索引。
-- `generation_jobs(batch_id, status, position)` 调度索引。
-- `canon_facts(novel_id, subject_id, predicate)` 检索索引。
-- `timeline_events(novel_id, story_time)` 时间索引。
-- FTS5：章节正文、摘要、故事圣经、实体描述和研究资料。
+- 当前：章节/卷/场景位置唯一索引、章节版本索引、实体类型索引、候选稿时间索引、
+  `generation_jobs(batch_id, status, position)` 调度索引，以及规划/连续性常用索引。
+- 规划：`canon_facts(novel_id, subject_id, predicate)` 检索索引。
+- 规划：按故事时间优化的时间线索引。
+- 规划：章节正文、摘要、故事圣经、实体描述和研究资料的 FTS5。
 
 ## 5. 迁移与备份
 
-- Drizzle migration 文件进入版本控制，启动时在事务中迁移。
-- 大迁移前创建数据库快照。
-- 项目导出包含 manifest、正文、故事圣经、结构化 JSON、资源和版本号。
-- 导入先校验 manifest 与哈希，再写入临时区，成功后原子切换。
+- 当前迁移是进入版本控制的幂等 SQL 列表，启动时通过 libSQL `batch(..., "write")` 执行。
+- 当前项目包包含版本号、正文、故事圣经、结构化数据和版本链；导入先做 Zod 校验，再以
+  新作品写入并重映射跨表 ID，不覆盖原项目。
+- 规划：大迁移前自动创建数据库快照。
+- 规划：为未来含外部资源的项目包增加 manifest 哈希与临时区原子切换。

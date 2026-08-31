@@ -3,6 +3,7 @@ import type { BibleSection, StoryEntity } from "./story-bible";
 import { characterTierOf } from "./story-bible";
 import type { StoryVolume } from "./story-structure";
 import type { PlanRange } from "./planning";
+import type { ScopeAdvice } from "./scope-advisor";
 
 export type PlanningReviewStep = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9;
 
@@ -18,6 +19,7 @@ export interface PlanningBrief {
 
 export interface PlanningWorkflow {
   novelId: string;
+  scopeAdvice: ScopeAdvice | null;
   brief: PlanningBrief;
   confirmedSteps: PlanningReviewStep[];
   updatedAt: string;
@@ -47,6 +49,7 @@ export function defaultPlanningWorkflow(
 ): PlanningWorkflow {
   return {
     novelId,
+    scopeAdvice: null,
     brief: { ...EMPTY_PLANNING_BRIEF },
     confirmedSteps: [],
     updatedAt: now,
@@ -64,6 +67,7 @@ export function normalizePlanningWorkflow(
   }
   return {
     novelId: value.novelId,
+    scopeAdvice: value.scopeAdvice ?? null,
     brief: { ...EMPTY_PLANNING_BRIEF, ...value.brief },
     confirmedSteps: contiguous,
     updatedAt: value.updatedAt,

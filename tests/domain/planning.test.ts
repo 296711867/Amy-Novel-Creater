@@ -5,6 +5,8 @@ import {
   extractPlanningJson,
   parseBiblePlan,
   parseStructurePlan,
+  rollingPlanningMemoryText,
+  rollingStructurePlanningPrompt,
   structurePlanningPrompt,
 } from "@domain/planning";
 import type { Novel } from "@domain/novel";
@@ -17,6 +19,7 @@ const novel: Novel = {
   targetWords: 300000,
   targetChapters: 100,
   chapterWords: 3000,
+  cycleSize: 10,
   status: "planning",
   createdAt: "2026-01-01T00:00:00.000Z",
   updatedAt: "2026-01-01T00:00:00.000Z",
@@ -55,6 +58,142 @@ describe("planning prompts", () => {
       },
     ]);
     expect(prompt).toContain("每天必须前进五步，否则受罚");
+  });
+  it("feeds chapter 1-10 canon memory into chapter 11-20 planning", () => {
+    const chapters = Array.from({ length: 20 }, (_, index) => ({
+        id: `c${index + 1}`,
+        novelId: novel.id,
+        position: index + 1,
+        title: `第${index + 1}章`,
+        outline: "",
+        volumeId: null,
+        status: "planned" as const,
+        targetWords: 3000,
+        content: "",
+        wordCount: 0,
+        updatedAt: "2026-01-01T00:00:00.000Z",
+      })),
+      prompt = rollingStructurePlanningPrompt(
+        novel,
+        [],
+        [{
+          id: "hero",
+          novelId: novel.id,
+          type: "character",
+          name: "洛沉璧",
+          summary: "守塔人",
+          aliases: [],
+          profile: {},
+          status: "active",
+          createdAt: "2026-01-01T00:00:00.000Z",
+          updatedAt: "2026-01-01T00:00:00.000Z",
+        }],
+        chapters,
+        { startChapter: 11, endChapter: 20 },
+        {
+          cycles: [{
+            id: "cycle-1",
+            novelId: novel.id,
+            startChapter: 1,
+            endChapter: 10,
+            status: "completed",
+            goal: "守住归萤塔",
+            openingState: "洛沉璧仍在塔中",
+            climax: "塔战",
+            expectedClosingState: "洛沉璧继续引路",
+            actualClosingState: "洛沉璧残念已经消散，银帆正在拆塔",
+            createdAt: "2026-01-01T00:00:00.000Z",
+            updatedAt: "2026-01-01T00:00:00.000Z",
+          }],
+          characterStates: [{
+            id: "state-1",
+            novelId: novel.id,
+            characterId: "hero",
+            chapterId: "c10",
+            summary: "残念消散，不能再次现身",
+            location: "归萤塔",
+            appearance: "",
+            outfit: "",
+            identity: "已退场",
+            physical: "消散",
+            emotional: "平静",
+            knowledge: [],
+            goals: [],
+            inventory: [],
+            skills: [],
+            source: "accepted_chapter",
+            createdAt: "2026-01-01T00:00:00.000Z",
+            updatedAt: "2026-01-01T00:00:00.000Z",
+          }],
+          timeline: [{
+            id: "timeline-1",
+            novelId: novel.id,
+            chapterId: "c10",
+            storyTime: "第十章结尾",
+            title: "拆塔危机",
+            detail: "银帆在西南三十里拆塔",
+            participantIds: ["hero"],
+            source: "accepted_chapter",
+            createdAt: "2026-01-01T00:00:00.000Z",
+            updatedAt: "2026-01-01T00:00:00.000Z",
+          }],
+          foreshadow: [{
+            id: "thread-1",
+            novelId: novel.id,
+            title: "银帆拆塔",
+            detail: "必须在下一批承接",
+            setupChapterId: "c10",
+            payoffChapterId: null,
+            status: "developing",
+            source: "accepted_chapter",
+            createdAt: "2026-01-01T00:00:00.000Z",
+            updatedAt: "2026-01-01T00:00:00.000Z",
+          }],
+        },
+      );
+    expect(prompt).toContain("实际结束（优先作为下一批起点）：洛沉璧残念已经消散");
+    expect(prompt).toContain("残念消散，不能再次现身");
+    expect(prompt).toContain("银帆拆塔（developing）");
+    expect(prompt).toContain("银帆在西南三十里拆塔");
+    expect(prompt).toContain("E-HERO [character] 洛沉璧");
+    expect(prompt).toContain("更新既有实体必须填写 targetRef");
+  });
+  it("caps rolling canon memory before it enters the planning prompt", () => {
+    const text = rollingPlanningMemoryText(
+      {
+        cycles: [],
+        characterStates: [],
+        foreshadow: [],
+        timeline: Array.from({ length: 40 }, (_, index) => ({
+          id: `t${index}`,
+          novelId: novel.id,
+          chapterId: "c10",
+          storyTime: `第${index}日`,
+          title: `事件${index}`,
+          detail: "重要正史".repeat(100),
+          participantIds: [],
+          source: "accepted_chapter" as const,
+          createdAt: "2026-01-01T00:00:00.000Z",
+          updatedAt: "2026-01-01T00:00:00.000Z",
+        })),
+      },
+      [],
+      [{
+        id: "c10",
+        novelId: novel.id,
+        position: 10,
+        title: "第10章",
+        outline: "",
+        volumeId: null,
+        status: "accepted",
+        targetWords: 3000,
+        content: "",
+        wordCount: 0,
+        updatedAt: "2026-01-01T00:00:00.000Z",
+      }],
+      { startChapter: 11, endChapter: 20 },
+    );
+    expect(text.length).toBeLessThanOrEqual(4000);
   });
 });
 

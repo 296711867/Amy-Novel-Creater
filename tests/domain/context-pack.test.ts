@@ -44,6 +44,7 @@ describe("context pack", () => {
           targetWords: 3000,
           targetChapters: 1,
           chapterWords: 3000,
+          cycleSize: 10,
           status: "planning",
           createdAt: now,
           updatedAt: now,

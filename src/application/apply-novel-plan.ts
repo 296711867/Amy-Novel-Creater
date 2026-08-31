@@ -30,11 +30,18 @@ import type {
   SaveStoryEntityInput,
   StoryEntity,
 } from "@domain/story-bible";
+import {
+  entityShortRef,
+  nearStoryEntities,
+  normalizeAliases,
+  resolveStoryEntity,
+} from "@domain/story-bible";
 import type {
   SaveVolumeInput,
   StoryStructure,
   StoryVolume,
 } from "@domain/story-structure";
+import { PlanningJsonStructureError } from "./repair-planning-content";
 
 export interface NovelPlanStore {
   saveBibleSection(input: SaveBibleSectionInput): Promise<BibleSection>;
@@ -54,6 +61,48 @@ export interface NovelPlanStore {
     endChapter: number,
     proposals: NewPlanningProposal[],
   ): Promise<PlanningProposal[]>;
+  addPlanningProposals(
+    novelId: string,
+    cycleId: string,
+    startChapter: number,
+    endChapter: number,
+    proposals: NewPlanningProposal[],
+  ): Promise<PlanningProposal[]>;
+}
+
+export function validateNovelPlanContent(input: {
+  phase: PlanPhase;
+  content: string;
+  targetChapters: number;
+  range?: PlanRange;
+}): void {
+  try {
+    if (input.phase === "bible") {
+      parseBiblePlan(input.content);
+      return;
+    }
+    if (input.phase === "cast") {
+      parseCastPlan(input.content);
+      return;
+    }
+    if (input.phase === "scenes") {
+      parseScenePlan(input.content);
+      return;
+    }
+  } catch (error) {
+    throw new PlanningJsonStructureError(
+      error instanceof Error ? error.message : "规划 JSON 结构解析失败",
+    );
+  }
+  let plan: ReturnType<typeof parseStructurePlan>;
+  try {
+    plan = parseStructurePlan(input.content);
+  } catch (error) {
+    throw new PlanningJsonStructureError(
+      error instanceof Error ? error.message : "规划 JSON 结构解析失败",
+    );
+  }
+  assertCompleteStructurePlan(plan, input.targetChapters, input.range);
 }
 
 export async function applyNovelPlan(input: {
@@ -84,27 +133,70 @@ export async function applyNovelPlan(input: {
 
   if (phase === "cast") {
     const plan = parseCastPlan(content),
-      byName = new Map(
-        entities
-          .filter((item) => item.type === "character")
-          .map((item) => [item.name, item] as const),
-      );
+      known = [...entities],
+      mergeSuggestions: NewPlanningProposal[] = [];
     for (const character of plan.characters) {
-      const existing = byName.get(character.name);
-      await store.saveStoryEntity({
+      const existing = resolveStoryEntity(
+        known,
+        "character",
+        character.entityRef,
+        character.name,
+      );
+      if (!existing) {
+        const near = nearStoryEntities(known, "character", character.name);
+        if (near.length === 1) {
+          mergeSuggestions.push({
+            action: "merge",
+            targetType: "character",
+            targetRef: entityShortRef(near[0]),
+            targetName: character.name,
+            patch: {
+              summary: character.summary,
+              aliases: normalizeAliases([character.name, ...character.aliases]),
+              profile: {
+                ...character.profile,
+                ...(character.detailedBio
+                  ? { 详细小传: character.detailedBio }
+                  : {}),
+                tier: character.tier,
+              },
+            },
+            reason: `疑似与既有角色“${near[0].name}”为同一实体，请作者确认合并`,
+          });
+          continue;
+        }
+      }
+      const saved = await store.saveStoryEntity({
         id: existing?.id,
         novelId: novel.id,
         type: "character",
-        name: character.name,
+        name: existing?.name ?? character.name,
         summary: character.summary,
-        aliases: character.aliases,
+        aliases: normalizeAliases([
+          ...(existing?.aliases ?? []),
+          ...(existing && existing.name !== character.name
+            ? [character.name]
+            : []),
+          ...character.aliases,
+        ]),
         profile: {
           ...(existing?.profile ?? {}),
           ...character.profile,
+          ...(character.detailedBio
+            ? { 详细小传: character.detailedBio }
+            : {}),
           tier: character.tier,
         },
       });
+      known.push(saved);
     }
+    await store.addPlanningProposals(
+      novel.id,
+      "entity-merge",
+      0,
+      0,
+      mergeSuggestions,
+    );
     await store.saveNamePool({
       ...namePool,
       usedNames: [
@@ -116,27 +208,57 @@ export async function applyNovelPlan(input: {
       ],
     });
     return summary(phase, {
-      entities: plan.characters.length,
+      entities: plan.characters.length - mergeSuggestions.length,
       extras: plan.extras.length,
     });
   }
 
   if (phase === "scenes") {
     const plan = parseScenePlan(content),
-      locations = new Map(
-        entities
-          .filter((item) => item.type === "location")
-          .map((item) => [item.name, item] as const),
-      );
+      known = [...entities],
+      mergeSuggestions: NewPlanningProposal[] = [];
     for (const scene of plan.scenes) {
-      const existing = locations.get(scene.name);
-      await store.saveStoryEntity({
+      const existing = resolveStoryEntity(
+        known,
+        "location",
+        scene.entityRef,
+        scene.name,
+      );
+      if (!existing) {
+        const near = nearStoryEntities(known, "location", scene.name);
+        if (near.length === 1) {
+          mergeSuggestions.push({
+            action: "merge",
+            targetType: "location",
+            targetRef: entityShortRef(near[0]),
+            targetName: scene.name,
+            patch: {
+              summary: scene.summary,
+              aliases: normalizeAliases([scene.name, ...scene.aliases]),
+              profile: {
+                purpose: scene.purpose,
+                mood: scene.mood,
+                visualAnchors: scene.visualAnchors.join("、"),
+                residents: scene.residents,
+                dangerLevel: scene.dangerLevel,
+              },
+            },
+            reason: `疑似与既有地点“${near[0].name}”为同一实体，请作者确认合并`,
+          });
+          continue;
+        }
+      }
+      const saved = await store.saveStoryEntity({
         id: existing?.id,
         novelId: novel.id,
         type: "location",
-        name: scene.name,
+        name: existing?.name ?? scene.name,
         summary: scene.summary,
-        aliases: scene.aliases,
+        aliases: normalizeAliases([
+          ...(existing?.aliases ?? []),
+          ...(existing && existing.name !== scene.name ? [scene.name] : []),
+          ...scene.aliases,
+        ]),
         profile: {
           ...(existing?.profile ?? {}),
           purpose: scene.purpose,
@@ -146,20 +268,58 @@ export async function applyNovelPlan(input: {
           dangerLevel: scene.dangerLevel,
         },
       });
+      known.push(saved);
     }
     for (const item of plan.entities) {
-      const existing = entities.find(
-        (value) => value.type === item.type && value.name === item.name,
+      const existing = resolveStoryEntity(
+        known,
+        item.type,
+        item.entityRef,
+        item.name,
       );
-      await store.saveStoryEntity({
+      if (!existing) {
+        const near = nearStoryEntities(known, item.type, item.name);
+        if (near.length === 1) {
+          mergeSuggestions.push({
+            action: "merge",
+            targetType: item.type,
+            targetRef: entityShortRef(near[0]),
+            targetName: item.name,
+            patch: {
+              summary: item.summary,
+              aliases: normalizeAliases([item.name, ...item.aliases]),
+              profile: item.profile,
+            },
+            reason: `疑似与既有实体“${near[0].name}”为同一实体，请作者确认合并`,
+          });
+          continue;
+        }
+      }
+      const saved = await store.saveStoryEntity({
         id: existing?.id,
         novelId: novel.id,
-        ...item,
+        type: item.type,
+        name: existing?.name ?? item.name,
+        summary: item.summary,
+        aliases: normalizeAliases([
+          ...(existing?.aliases ?? []),
+          ...(existing && existing.name !== item.name ? [item.name] : []),
+          ...item.aliases,
+        ]),
         profile: { ...(existing?.profile ?? {}), ...item.profile },
       });
+      known.push(saved);
     }
+    await store.addPlanningProposals(
+      novel.id,
+      "entity-merge",
+      0,
+      0,
+      mergeSuggestions,
+    );
     return summary(phase, {
-      entities: plan.scenes.length + plan.entities.length,
+      entities:
+        plan.scenes.length + plan.entities.length - mergeSuggestions.length,
     });
   }
 
@@ -211,7 +371,7 @@ export async function applyNovelPlan(input: {
       chapterId: target.id,
       volumeId,
       title: chapter.title,
-      outline: renderChapterPlan(chapter),
+      outline: renderChapterPlan(chapter, entities),
       targetWords: novel.chapterWords,
     });
   }
@@ -241,12 +401,17 @@ export async function applyNovelPlan(input: {
 
 export function renderChapterPlan(
   chapter: ReturnType<typeof parseStructurePlan>["chapters"][number],
+  entities: StoryEntity[] = [],
 ): string {
+  const label = (value: string) =>
+    entities.find((item) => entityShortRef(item) === value.trim().toUpperCase())
+      ?.name ?? value;
   const references = [
-    chapter.viewpoint && `【视角】${chapter.viewpoint}`,
-    chapter.characters.length && `【人物】${chapter.characters.join("、")}`,
-    chapter.scenes.length && `【场景】${chapter.scenes.join("、")}`,
-    chapter.items.length && `【道具】${chapter.items.join("、")}`,
+    chapter.viewpoint && `【视角】${label(chapter.viewpoint)}`,
+    chapter.characters.length &&
+      `【人物】${chapter.characters.map(label).join("、")}`,
+    chapter.scenes.length && `【场景】${chapter.scenes.map(label).join("、")}`,
+    chapter.items.length && `【道具】${chapter.items.map(label).join("、")}`,
     chapter.skills.length && `【技能】${chapter.skills.join("、")}`,
   ]
     .filter(Boolean);

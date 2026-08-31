@@ -10,6 +10,7 @@ import {
 describe("planning workflow", () => {
   it("keeps confirmations contiguous and invalidates downstream reviews", () => {
     const empty = defaultPlanningWorkflow("n1", "t0");
+    expect(empty.scopeAdvice).toBeNull();
     expect(() => confirmPlanningStep(empty, 2)).toThrow("请先确认第 1 步");
 
     const first = confirmPlanningStep(empty, 1, "t1"),

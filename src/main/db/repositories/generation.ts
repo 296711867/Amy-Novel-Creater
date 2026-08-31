@@ -11,9 +11,11 @@ import type {
 import {
   estimateGeneration,
   type GenerationBatch,
+  type GenerationEvent,
   type GenerationJob,
   type GenerationJobStatus,
   type GenerationPolicy,
+  type NewGenerationEvent,
 } from "@domain/generation";
 import { parseJson, type DbRow } from "./shared";
 import type { createChaptersRepository } from "./chapters";
@@ -58,8 +60,23 @@ function batchFrom(row: DbRow): GenerationBatch {
     status: row.status as GenerationBatch["status"],
     policy: parseJson(row.policy_json, {} as GenerationPolicy),
     outputTokensUsed: Number(row.output_tokens_used),
+    awaitingReview: Number(row.awaiting_review ?? 0) === 1,
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
+  };
+}
+
+function eventFrom(row: DbRow): GenerationEvent {
+  return {
+    id: String(row.id),
+    batchId: String(row.batch_id),
+    novelId: String(row.novel_id),
+    chapterId: row.chapter_id ? String(row.chapter_id) : null,
+    stage: row.stage as GenerationEvent["stage"],
+    level: row.level as GenerationEvent["level"],
+    message: String(row.message),
+    data: parseJson(row.data_json, {}),
+    createdAt: String(row.created_at),
   };
 }
 
@@ -200,6 +217,22 @@ export function createGenerationRepository(
     return result.rows.map((row) => candidateFrom(row as DbRow));
   }
 
+  /** 作者改稿：只允许在候选态修改内容，接受时写入的就是改后版本。 */
+  async function updateChapterCandidateContent(
+    id: string,
+    content: string,
+  ): Promise<ChapterCandidate> {
+    const candidate = await getChapterCandidate(id);
+    if (!candidate) throw new Error("Candidate not found");
+    if (candidate.status !== "candidate")
+      throw new Error("候选稿已处理，不能再修改；请重新生成");
+    await client.execute({
+      sql: "UPDATE chapter_candidates SET content=?,word_count=?,updated_at=? WHERE id=?",
+      args: [content, countCjkWords(content), new Date().toISOString(), id],
+    });
+    return (await getChapterCandidate(id))!;
+  }
+
   async function setCandidateStatus(
     id: string,
     status: "accepted" | "rejected",
@@ -247,7 +280,7 @@ export function createGenerationRepository(
     await client.batch(
       [
         {
-          sql: "INSERT INTO generation_batches VALUES (?,?,?,?,?,?,?)",
+          sql: `INSERT INTO generation_batches (id,novel_id,status,policy_json,output_tokens_used,awaiting_review,created_at,updated_at) VALUES (?,?,?,?,?,0,?,?)`,
           args: [id, novelId, "queued", JSON.stringify(policy), 0, now, now],
         },
         ...selected.map((chapter, index) => ({
@@ -295,14 +328,77 @@ export function createGenerationRepository(
   async function setBatchStatus(
     id: string,
     status: GenerationBatch["status"],
+    patch: { awaitingReview?: boolean } = {},
   ): Promise<GenerationBatch> {
     await client.execute({
-      sql: "UPDATE generation_batches SET status=?,updated_at=? WHERE id=?",
-      args: [status, new Date().toISOString(), id],
+      sql: "UPDATE generation_batches SET status=?,awaiting_review=?,updated_at=? WHERE id=?",
+      args: [
+        status,
+        patch.awaitingReview ? 1 : 0,
+        new Date().toISOString(),
+        id,
+      ],
     });
     const item = await getGenerationBatch(id);
     if (!item) throw new Error("Batch not found");
     return item;
+  }
+
+  /** 候选稿被接受为正史后，把对应任务标记完成（审批门放行下一章）。 */
+  async function completeJobByCandidate(candidateId: string): Promise<void> {
+    await client.execute({
+      sql: "UPDATE generation_jobs SET status='completed',updated_at=? WHERE candidate_id=? AND status='candidate_ready'",
+      args: [new Date().toISOString(), candidateId],
+    });
+  }
+
+  async function getJobByCandidate(
+    candidateId: string,
+  ): Promise<GenerationJob | null> {
+    const result = await client.execute({
+      sql: "SELECT * FROM generation_jobs WHERE candidate_id=? LIMIT 1",
+      args: [candidateId],
+    });
+    return result.rows[0] ? jobFrom(result.rows[0] as DbRow) : null;
+  }
+
+  async function saveGenerationEvent(
+    input: NewGenerationEvent,
+  ): Promise<GenerationEvent> {
+    const id = nanoid();
+    await client.execute({
+      sql: "INSERT INTO generation_events VALUES (?,?,?,?,?,?,?,?,?)",
+      args: [
+        id,
+        input.batchId,
+        input.novelId,
+        input.chapterId,
+        input.stage,
+        input.level,
+        input.message,
+        JSON.stringify(input.data ?? {}),
+        new Date().toISOString(),
+      ],
+    });
+    return {
+      id,
+      createdAt: new Date().toISOString(),
+      ...input,
+      data: input.data ?? {},
+    };
+  }
+
+  async function listGenerationEvents(
+    batchId: string,
+    limit = 300,
+  ): Promise<GenerationEvent[]> {
+    const result = await client.execute({
+      sql: "SELECT * FROM generation_events WHERE batch_id=? ORDER BY created_at DESC LIMIT ?",
+      args: [batchId, limit],
+    });
+    return result.rows
+      .map((row) => eventFrom(row as DbRow))
+      .reverse();
   }
 
   async function updateGenerationJob(
@@ -481,6 +577,7 @@ export function createGenerationRepository(
     createChapterCandidate,
     getChapterCandidate,
     listChapterCandidates,
+    updateChapterCandidateContent,
     setCandidateStatus,
     createGenerationBatch,
     listGenerationBatches,
@@ -488,6 +585,10 @@ export function createGenerationRepository(
     listGenerationJobs,
     recoverGenerationJobs,
     setBatchStatus,
+    completeJobByCandidate,
+    getJobByCandidate,
+    saveGenerationEvent,
+    listGenerationEvents,
     updateGenerationJob,
     saveFindings,
     listFindings,

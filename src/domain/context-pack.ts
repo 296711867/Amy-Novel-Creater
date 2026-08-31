@@ -82,6 +82,35 @@ export function selectRecentChapters(
     .sort((a, b) => a.position - b.position)
     .slice(-limit);
 }
+/**
+ * 写第 N 章时只取每个人截至第 N-1 章的最新状态：初始档案之外的
+ * 外貌/衣着/身份/伤势演进都按章覆盖，避免“伤好了、衣服换回来了”。
+ * 手动创建（无章节归属）的状态视为作者给定的最新状态。
+ */
+export function selectCharacterStates(
+  states: CharacterState[],
+  chapterPositionById: Map<string, number>,
+  beforePosition: number,
+): CharacterState[] {
+  const positionOf = (state: CharacterState): number =>
+    state.chapterId && chapterPositionById.has(state.chapterId)
+      ? chapterPositionById.get(state.chapterId)!
+      : Number.POSITIVE_INFINITY;
+  const latest = new Map<string, CharacterState>();
+  for (const state of states) {
+    const position = positionOf(state);
+    if (Number.isFinite(position) && position >= beforePosition) continue;
+    const current = latest.get(state.characterId);
+    if (
+      !current ||
+      positionOf(state) > positionOf(current) ||
+      (positionOf(state) === positionOf(current) &&
+        state.updatedAt >= current.updatedAt)
+    )
+      latest.set(state.characterId, state);
+  }
+  return [...latest.values()];
+}
 function fingerprint(text: string): string {
   let hash = 2166136261;
   for (let i = 0; i < text.length; i++) {
@@ -235,7 +264,19 @@ export function buildContextPack(input: ContextPackInput): ContextPack {
       label: "角色当前状态",
       priority: 86,
       required: false,
-      text: `${item.summary}\n位置：${item.location}；身体：${item.physical}；情绪：${item.emotional}\n目标：${item.goals.join("、")}\n已知：${item.knowledge.join("、")}\n物品：${item.inventory.join("、")}\n技能：${item.skills.join("、")}`,
+      text: [
+        item.summary,
+        `位置：${item.location}；身体：${item.physical}；情绪：${item.emotional}`,
+        item.appearance && `外貌：${item.appearance}`,
+        item.outfit && `衣着：${item.outfit}`,
+        item.identity && `身份：${item.identity}`,
+        `目标：${item.goals.join("、")}`,
+        `已知：${item.knowledge.join("、")}`,
+        `物品：${item.inventory.join("、")}`,
+        `技能：${item.skills.join("、")}`,
+      ]
+        .filter(Boolean)
+        .join("\n"),
     })),
     ...input.recentChapters.map((item) => ({
       id: item.id,

@@ -32,12 +32,20 @@ import {
   scopeAdvisoryPrompt,
 } from "@domain/scope-advisor";
 import {
+  parseBriefDraft,
   briefDraftingMaxOutputTokens,
   briefDraftingPrompt,
-  parseBriefDraft,
 } from "@domain/brief-drafting";
+import {
+  parsePersonaRecommendation,
+  personaRecommendationMaxOutputTokens,
+  personaRecommendationPrompt,
+  type PersonaSuggestion,
+} from "@domain/persona-recommendation";
 import type {
   ChapterCandidate,
+  ContinueChapterInput,
+  ContinueChapterResult,
   GenerateChapterInput,
   GenerationProgress,
 } from "@domain/chapter-generation";
@@ -54,14 +62,19 @@ import {
 } from "@domain/name-pool";
 import type { PlanPhase, PlanRange } from "@domain/planning";
 import {
+  candidateReviewComplete,
   estimateGeneration,
+  pendingFactProposalCount,
   type GenerationBatch,
+  type GenerationEvent,
   type GenerationJob,
   type GenerationJobStatus,
   type GenerationPolicy,
+  type NewGenerationEvent,
 } from "@domain/generation";
 import type { PlatformPort } from "@application/ports/platform-port";
 import {
+  remapEntityShortRef,
   normalizeAliases,
   type BibleSection,
   type BibleSectionKind,
@@ -80,7 +93,11 @@ import {
   type TimelineEvent,
 } from "@domain/continuity";
 import type { NovelProjectBundle } from "@domain/project-export";
-import { applyNovelPlan } from "@application/apply-novel-plan";
+import {
+  applyNovelPlan,
+  validateNovelPlanContent,
+} from "@application/apply-novel-plan";
+import { repairPlanningContentOnce } from "@application/repair-planning-content";
 import {
   defaultPlanningWorkflow,
   assertPlanningReady,
@@ -95,12 +112,26 @@ import type {
   PlanningCycle,
   SavePlanningCycleInput,
 } from "@domain/planning-cycle";
-import type {
-  NewPlanningProposal,
-  PlanningProposal,
-  PlanningProposalStatus,
+import {
+  planningProposalIdentity,
+  type NewPlanningProposal,
+  type PlanningProposal,
+  type PlanningProposalStatus,
 } from "@domain/planning-proposal";
 import { reviewPlanningProposal } from "@application/review-planning-proposal";
+import {
+  applyStyleTemplate,
+  parseStyleAnalysis,
+  styleAnalysisPrompt,
+  type AnalyzeStyleTemplateInput,
+  type SaveStyleTemplateInput,
+  type StyleTemplate,
+} from "@domain/style-template";
+import type {
+  CreateWorkflowRunInput,
+  UpdateWorkflowRunInput,
+  WorkflowRun,
+} from "@domain/workflow-run";
 
 const NOVELS_KEY = "amy-novel:novels";
 const chaptersKey = (novelId: string): string =>
@@ -121,6 +152,7 @@ const scenesKey = (novelId: string): string => `amy-novel:scenes:${novelId}`;
 const contextKey = (novelId: string): string => `amy-novel:context:${novelId}`;
 const USAGE_KEY = "amy-novel:usage";
 const PROFILES_KEY = "amy-novel:model-profiles";
+const STYLE_TEMPLATES_KEY = "amy-novel:style-templates";
 const candidatesKey = (chapterId: string) =>
   `amy-novel:candidates:${chapterId}`;
 const findingsKey = (candidateId: string) =>
@@ -129,6 +161,7 @@ const proposalsKey = (candidateId: string) =>
   `amy-novel:proposals:${candidateId}`;
 const BATCHES_KEY = "amy-novel:generation-batches";
 const jobsKey = (id: string) => `amy-novel:generation-jobs:${id}`;
+const eventsKey = (id: string) => `amy-novel:generation-events:${id}`;
 const workflowKey = (novelId: string) =>
   `amy-novel:planning-workflow:${novelId}`;
 const planningRunsKey = (novelId: string) =>
@@ -137,6 +170,8 @@ const planningCyclesKey = (novelId: string) =>
   `amy-novel:planning-cycles:${novelId}`;
 const planningPlanProposalsKey = (novelId: string) =>
   `amy-novel:planning-proposals:${novelId}`;
+const workflowRunsKey = (novelId: string) =>
+  `amy-novel:workflow-runs:${novelId}`;
 
 function read<T>(key: string, fallback: T): T {
   try {
@@ -149,6 +184,55 @@ function read<T>(key: string, fallback: T): T {
 
 function write<T>(key: string, value: T): void {
   localStorage.setItem(key, JSON.stringify(value));
+}
+
+async function requestWebPlanning(
+  profile: ModelProfile,
+  apiKey: string,
+  prompt: string,
+  maxOutputTokens: number,
+  temperature: number,
+): Promise<{
+  content: string;
+  inputTokens: number;
+  outputTokens: number;
+  cachedTokens: number;
+  measured: boolean;
+}> {
+  const response = await fetch(normalizeChatCompletionsUrl(profile.baseUrl), {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      ...(apiKey ? { authorization: `Bearer ${apiKey}` } : {}),
+    },
+    body: JSON.stringify(
+      chatCompletionsRequestBody(profile, prompt, {
+        maxOutputTokens,
+        temperature,
+        stream: false,
+        thinking: "disabled",
+      }),
+    ),
+    signal: AbortSignal.timeout(300_000),
+  });
+  if (!response.ok)
+    throw new Error(`模型请求失败（HTTP ${response.status}）`);
+  const data = (await response.json()) as {
+      choices?: Array<{ message?: { content?: string } }>;
+      usage?: {
+        prompt_tokens?: number;
+        completion_tokens?: number;
+        prompt_tokens_details?: { cached_tokens?: number };
+      };
+    },
+    content = data.choices?.[0]?.message?.content ?? "";
+  return {
+    content,
+    inputTokens: data.usage?.prompt_tokens ?? estimateTokens(prompt),
+    outputTokens: data.usage?.completion_tokens ?? estimateTokens(content),
+    cachedTokens: data.usage?.prompt_tokens_details?.cached_tokens ?? 0,
+    measured: Boolean(data.usage),
+  };
 }
 
 /** 旧版本 localStorage 中的作品没有 cycleSize，读取时统一归一化。 */
@@ -173,7 +257,17 @@ function replaceWebPlanningProposals(
         item.startChapter !== startChapter ||
         item.endChapter !== endChapter,
     ),
-    created = proposals.map((item) => ({
+    seen = new Set(
+      kept
+        .filter((item) => item.status !== "rejected")
+        .map(planningProposalIdentity),
+    ),
+    created = proposals.filter((item) => {
+      const key = planningProposalIdentity(item);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    }).map((item) => ({
       ...item,
       id: nanoid(),
       novelId,
@@ -188,6 +282,45 @@ function replaceWebPlanningProposals(
   return created;
 }
 
+function addWebPlanningProposals(
+  novelId: string,
+  cycleId: string,
+  startChapter: number,
+  endChapter: number,
+  proposals: NewPlanningProposal[],
+): PlanningProposal[] {
+  const existing = read<PlanningProposal[]>(
+      planningPlanProposalsKey(novelId),
+      [],
+    ),
+    seen = new Set(
+      existing
+        .filter((item) => item.status !== "rejected")
+        .map(planningProposalIdentity),
+    ),
+    now = new Date().toISOString(),
+    created = proposals
+      .filter((item) => {
+        const key = planningProposalIdentity(item);
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      })
+      .map((item) => ({
+        ...item,
+        id: nanoid(),
+        novelId,
+        cycleId,
+        startChapter,
+        endChapter,
+        status: "pending" as const,
+        createdAt: now,
+        updatedAt: now,
+      }));
+  write(planningPlanProposalsKey(novelId), [...existing, ...created]);
+  return created;
+}
+
 function updateWebPlanningProposalStatus(
   novelId: string,
   id: string,
@@ -199,6 +332,46 @@ function updateWebPlanningProposalStatus(
   list[index] = { ...list[index], status, updatedAt: new Date().toISOString() };
   write(planningPlanProposalsKey(novelId), list);
   return list[index];
+}
+
+function reviewWebCandidate(candidateId: string): {
+  candidate: ChapterCandidate | null;
+  pending: number;
+  batch: GenerationBatch | null;
+  job: GenerationJob | null;
+} {
+  let candidate: ChapterCandidate | null = null;
+  for (const novel of readNovels()) {
+    for (const chapter of read<Chapter[]>(chaptersKey(novel.id), [])) {
+      candidate =
+        read<ChapterCandidate[]>(candidatesKey(chapter.id), []).find(
+          (item) => item.id === candidateId,
+        ) ?? null;
+      if (candidate) break;
+    }
+    if (candidate) break;
+  }
+  const proposals = read<FactProposal[]>(proposalsKey(candidateId), []),
+    pending = pendingFactProposalCount(proposals);
+  for (const batch of read<GenerationBatch[]>(BATCHES_KEY, [])) {
+    const jobs = read<GenerationJob[]>(jobsKey(batch.id), []),
+      index = jobs.findIndex((item) => item.candidateId === candidateId);
+    if (index < 0) continue;
+    if (
+      candidate &&
+      candidateReviewComplete(candidate.status, proposals) &&
+      jobs[index].status === "candidate_ready"
+    ) {
+      jobs[index] = {
+        ...jobs[index],
+        status: "completed",
+        updatedAt: new Date().toISOString(),
+      };
+      write(jobsKey(batch.id), jobs);
+    }
+    return { candidate, pending, batch, job: jobs[index] };
+  }
+  return { candidate, pending, batch: null, job: null };
 }
 
 export const webPlatform: PlatformPort = {
@@ -242,6 +415,7 @@ export const webPlatform: PlatformPort = {
             thinking: "disabled",
           }),
         ),
+        signal: AbortSignal.timeout(120_000),
       },
     );
     if (!response.ok)
@@ -279,6 +453,7 @@ export const webPlatform: PlatformPort = {
             thinking: "disabled",
           }),
         ),
+        signal: AbortSignal.timeout(120_000),
       },
     );
     if (!response.ok)
@@ -287,6 +462,43 @@ export const webPlatform: PlatformPort = {
       choices?: Array<{ message?: { content?: string } }>;
     };
     return parseBriefDraft(data.choices?.[0]?.message?.content ?? "");
+  },
+  async suggestPersonaLineup(novelId: string): Promise<PersonaSuggestion[]> {
+    const novel = readNovels().find((item) => item.id === novelId);
+    if (!novel) throw new Error("作品不存在");
+    const profile = read<ModelProfile[]>(PROFILES_KEY, []).find(
+      (item) => item.isDefault,
+    );
+    if (!profile) throw new Error("请先在设置页配置默认写作模型");
+    const key = sessionStorage.getItem(`amy-novel:secret:${profile.id}`) ?? "",
+      bible = await this.listBibleSections(novelId),
+      characters = await this.listStoryEntities(novelId),
+      prompt = personaRecommendationPrompt({ novel, bible, characters }),
+      response = await fetch(normalizeChatCompletionsUrl(profile.baseUrl), {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          ...(key ? { authorization: `Bearer ${key}` } : {}),
+        },
+        body: JSON.stringify(
+          chatCompletionsRequestBody(profile, prompt, {
+            maxOutputTokens: personaRecommendationMaxOutputTokens(),
+            temperature: 0.6,
+            stream: false,
+            thinking: "disabled",
+          }),
+        ),
+        signal: AbortSignal.timeout(180_000),
+      });
+    if (!response.ok)
+      throw new Error(`模型请求失败（HTTP ${response.status}）`);
+    const data = (await response.json()) as {
+      choices?: Array<{ message?: { content?: string } }>;
+    };
+    return parsePersonaRecommendation(
+      data.choices?.[0]?.message?.content ?? "",
+      characters,
+    );
   },
   async importNovelProject(bundle: NovelProjectBundle) {
     const id = nanoid(),
@@ -458,12 +670,20 @@ export const webPlatform: PlatformPort = {
     write(
       planningPlanProposalsKey(id),
       (bundle.planningProposals ?? []).flatMap((item) =>
-        cycleIds.has(item.cycleId)
+        item.cycleId === "entity-merge" || cycleIds.has(item.cycleId)
           ? [{
               ...item,
               id: nanoid(),
               novelId: id,
-              cycleId: cycleIds.get(item.cycleId)!,
+              cycleId:
+                item.cycleId === "entity-merge"
+                  ? "entity-merge"
+                  : cycleIds.get(item.cycleId)!,
+              targetRef: remapEntityShortRef(
+                item.targetRef,
+                bundle.entities,
+                entityIds,
+              ),
             }]
           : [],
       ),
@@ -487,8 +707,10 @@ export const webPlatform: PlatformPort = {
       localStorage.removeItem(versionsKey(chapter.id));
       localStorage.removeItem(candidatesKey(chapter.id));
     }
-    for (const batch of batches.filter((item) => item.novelId === id))
+    for (const batch of batches.filter((item) => item.novelId === id)) {
       localStorage.removeItem(jobsKey(batch.id));
+      localStorage.removeItem(eventsKey(batch.id));
+    }
     [
       chaptersKey(id),
       bibleKey(id),
@@ -586,8 +808,43 @@ export const webPlatform: PlatformPort = {
     const workflow = await this.getPlanningWorkflow(novelId);
     const entities = await this.listStoryEntities(novelId);
     const chapters = await this.listChapters(novelId);
+    const rollingMemory =
+      phase === "structure" && range
+        ? await Promise.all([
+            this.listPlanningCycles(novelId),
+            this.listCharacterStates(novelId),
+            this.listTimelineEvents(novelId),
+            this.listForeshadowThreads(novelId),
+          ]).then(([cycles, characterStates, timeline, foreshadow]) => ({
+            cycles,
+            characterStates,
+            timeline,
+            foreshadow,
+          }))
+        : undefined;
     const poolKey = `amy-novel:name-pool:${novelId}`,
-      namePool = read<NamePool>(poolKey, defaultNamePool(novelId, novel.genre));
+      namePool = read<NamePool>(poolKey, defaultNamePool(novelId, novel.genre)),
+      planEventId = `planning:${novelId}`,
+      emitPlan = (
+        stage: "plan_started" | "context_build" | "generating" | "plan_received" | "plan_applied" | "retry" | "failed" | "batch_completed",
+        level: "info" | "success" | "warning" | "error",
+        message: string,
+        data: Record<string, unknown> = {},
+      ) =>
+        void this.appendGenerationEvent?.({
+          batchId: planEventId,
+          novelId,
+          chapterId: null,
+          stage,
+          level,
+          message,
+          data: { phase, ...data },
+        });
+    emitPlan(
+      "plan_started",
+      "info",
+      `开始生成规划：读取设定（圣经 ${bible.filter((item) => item.content.trim()).length} 份、实体 ${entities.length} 张、章节 ${chapters.length} 章）`,
+    );
     const prompt = novelPlanningPrompt({
       phase,
       novel,
@@ -596,8 +853,15 @@ export const webPlatform: PlatformPort = {
       entities,
       chapters,
       range,
+      rollingMemory,
       namePoolText: namePoolText(namePool),
     });
+    emitPlan(
+      "context_build",
+      "info",
+      `提示已构建（约 ${estimateTokens(prompt).toLocaleString()} tokens，模型 ${profile.modelId}）`,
+      { inputTokens: estimateTokens(prompt), model: profile.modelId },
+    );
     const now = new Date().toISOString(),
       run: PlanningRun = {
         id: nanoid(),
@@ -610,6 +874,7 @@ export const webPlatform: PlatformPort = {
         model: profile.modelId,
         promptHash: planningPromptHash(prompt),
         rawResponse: "",
+        repairResponse: "",
         inputTokens: 0,
         outputTokens: 0,
         cachedTokens: 0,
@@ -628,64 +893,94 @@ export const webPlatform: PlatformPort = {
     saveRun(run);
     try {
       // 浏览器直连模型受 CORS 限制，多数 provider 需要代理才能使用。
-      const response = await fetch(
-        normalizeChatCompletionsUrl(profile.baseUrl),
-        {
-          method: "POST",
-          headers: {
-            "content-type": "application/json",
-            ...(key ? { authorization: `Bearer ${key}` } : {}),
-          },
-          body: JSON.stringify(
-            chatCompletionsRequestBody(profile, prompt, {
-              maxOutputTokens: planningMaxOutputTokens(phase),
-              temperature: 0.7,
-              stream: false,
-              thinking: "disabled",
-            }),
-          ),
-        },
-      );
-      if (!response.ok)
-        throw new Error(`模型请求失败（HTTP ${response.status}）`);
-      const data = (await response.json()) as {
-        choices?: Array<{ message?: { content?: string } }>;
-        usage?: {
-          prompt_tokens?: number;
-          completion_tokens?: number;
-          prompt_tokens_details?: { cached_tokens?: number };
-        };
-      };
-      const content = data.choices?.[0]?.message?.content ?? "",
-        inputTokens = data.usage?.prompt_tokens ?? estimateTokens(prompt),
-        outputTokens = data.usage?.completion_tokens ?? estimateTokens(content),
+      const result = await requestWebPlanning(
+          profile,
+          key,
+          prompt,
+          planningMaxOutputTokens(phase),
+          0.7,
+        ),
         received: PlanningRun = {
           ...run,
-          rawResponse: content,
-          inputTokens,
-          outputTokens,
-          cachedTokens: data.usage?.prompt_tokens_details?.cached_tokens ?? 0,
+          rawResponse: result.content,
+          inputTokens: result.inputTokens,
+          outputTokens: result.outputTokens,
+          cachedTokens: result.cachedTokens,
           status: "received",
           updatedAt: new Date().toISOString(),
         };
+      let latestRun = received;
       // 原始响应先保存，解析失败时仍可检查和重新解析。
       saveRun(received);
+      emitPlan(
+        "plan_received",
+        "info",
+        `模型已返回 ${result.content.length.toLocaleString()} 字，正在解析并写入`,
+        { outputTokens: result.outputTokens },
+      );
       await this.saveUsage({
         novelId,
         chapterId: null,
         operation: "planning",
         provider: profile.provider,
         model: profile.modelId,
-        inputTokens,
-        outputTokens,
+        inputTokens: result.inputTokens,
+        outputTokens: result.outputTokens,
         cachedTokens: received.cachedTokens,
         cost: null,
-        measurement: data.usage ? "provider" : "estimated",
+        measurement: result.measured ? "provider" : "estimated",
+      });
+      const resolved = await repairPlanningContentOnce({
+        phase,
+        content: result.content,
+        validate: (content) =>
+          validateNovelPlanContent({
+            phase,
+            content,
+            targetChapters: novel.targetChapters,
+            range,
+          }),
+        repair: async (repairPrompt) => {
+          emitPlan(
+            "retry",
+            "warning",
+            "规划 JSON 解析失败，正在执行一次低温结构修复",
+          );
+          const repaired = await requestWebPlanning(
+            profile,
+            key,
+            repairPrompt,
+            planningMaxOutputTokens(phase),
+            0.1,
+          );
+          latestRun = {
+            ...latestRun,
+            repairResponse: repaired.content,
+            inputTokens: latestRun.inputTokens + repaired.inputTokens,
+            outputTokens: latestRun.outputTokens + repaired.outputTokens,
+            cachedTokens: latestRun.cachedTokens + repaired.cachedTokens,
+            updatedAt: new Date().toISOString(),
+          };
+          saveRun(latestRun);
+          await this.saveUsage({
+            novelId,
+            chapterId: null,
+            operation: "planning",
+            provider: profile.provider,
+            model: profile.modelId,
+            inputTokens: repaired.inputTokens,
+            outputTokens: repaired.outputTokens,
+            cachedTokens: repaired.cachedTokens,
+            cost: null,
+            measurement: repaired.measured ? "provider" : "estimated",
+          });
+          return repaired.content;
+        },
       });
       const summary = await applyNovelPlan({
         novel,
         phase,
-        content,
+        content: resolved.content,
         entities,
         namePool,
         range,
@@ -710,34 +1005,77 @@ export const webPlatform: PlatformPort = {
                 proposals,
               ),
             ),
+          addPlanningProposals: (id, cycleId, start, end, proposals) =>
+            Promise.resolve(
+              addWebPlanningProposals(id, cycleId, start, end, proposals),
+            ),
         },
       });
       saveRun({
-        ...received,
+        ...latestRun,
         status: "completed",
         updatedAt: new Date().toISOString(),
       });
+      emitPlan(
+        "plan_applied",
+        "success",
+        `已写入正史草稿：${summary.sections} 份文档、${summary.entities} 张实体卡、${summary.chapters} 个章节策划`,
+        { sections: summary.sections, entities: summary.entities, chapters: summary.chapters },
+      );
+      emitPlan("batch_completed", "success", "规划生成完成，请回到页面审核");
       return summary;
     } catch (error) {
       const current = read<PlanningRun[]>(planningRunsKey(novelId), []).find(
-        (item) => item.id === run.id,
-      );
+          (item) => item.id === run.id,
+        );
       saveRun({
         ...(current ?? run),
         status: "failed",
         error: error instanceof Error ? error.message : "规划生成失败",
         updatedAt: new Date().toISOString(),
       });
+      emitPlan(
+        "failed",
+        "error",
+        `生成失败：${error instanceof Error ? error.message : "未知错误"}`,
+      );
       throw error;
     }
   },
   async listPlanningRuns(novelId: string) {
-    return read<PlanningRun[]>(planningRunsKey(novelId), []);
+    return read<PlanningRun[]>(planningRunsKey(novelId), []).map((item) => ({
+      ...item,
+      repairResponse: item.repairResponse ?? "",
+    }));
   },
   async listPlanningCycles(novelId: string) {
     return read<PlanningCycle[]>(planningCyclesKey(novelId), []);
   },
   async savePlanningCycle(input: SavePlanningCycleInput) {
+    if (input.status === "completed") {
+      const chapters = read<Chapter[]>(chaptersKey(input.novelId), []).filter(
+          (item) =>
+            item.position >= input.startChapter &&
+            item.position <= input.endChapter,
+        ),
+        accepted = chapters.flatMap((chapter) =>
+          read<ChapterCandidate[]>(candidatesKey(chapter.id), []).filter(
+            (item) => item.status === "accepted",
+          ),
+        ),
+        pending = accepted.reduce(
+          (total, candidate) =>
+            total +
+            pendingFactProposalCount(
+              read<FactProposal[]>(proposalsKey(candidate.id), []),
+            ),
+          0,
+        );
+      if (pending)
+        throw new Error(
+          `本批仍有 ${pending} 条正史建议未处理，不能封存周期`,
+        );
+    }
     const list = read<PlanningCycle[]>(planningCyclesKey(input.novelId), []),
       existing = input.id
         ? list.find((item) => item.id === input.id)
@@ -762,6 +1100,46 @@ export const webPlatform: PlatformPort = {
   },
   async listPlanningProposals(novelId: string) {
     return read<PlanningProposal[]>(planningPlanProposalsKey(novelId), []);
+  },
+  async createWorkflowRun(input: CreateWorkflowRunInput) {
+    const now = new Date().toISOString(),
+      run: WorkflowRun = {
+        id: nanoid(),
+        novelId: input.novelId,
+        mode: input.mode,
+        currentPhase: "bible",
+        status: "paused",
+        checkpoint: null,
+        config: input.config,
+        attempt: 0,
+        batchId: null,
+        error: "",
+        createdAt: now,
+        updatedAt: now,
+      };
+    write(workflowRunsKey(input.novelId), [
+      run,
+      ...read<WorkflowRun[]>(workflowRunsKey(input.novelId), []),
+    ]);
+    return run;
+  },
+  async updateWorkflowRun(input: UpdateWorkflowRunInput) {
+    for (const novel of readNovels()) {
+      const list = read<WorkflowRun[]>(workflowRunsKey(novel.id), []),
+        index = list.findIndex((item) => item.id === input.id);
+      if (index < 0) continue;
+      list[index] = {
+        ...list[index],
+        ...input,
+        updatedAt: new Date().toISOString(),
+      };
+      write(workflowRunsKey(novel.id), list);
+      return list[index];
+    }
+    throw new Error("Workflow run 不存在");
+  },
+  async listWorkflowRuns(novelId: string) {
+    return read<WorkflowRun[]>(workflowRunsKey(novelId), []);
   },
   async reviewPlanningProposal(novelId, proposalId, status) {
     return reviewPlanningProposal(
@@ -1137,6 +1515,75 @@ export const webPlatform: PlatformPort = {
       };
     }
   },
+  async listStyleTemplates() {
+    return read<StyleTemplate[]>(STYLE_TEMPLATES_KEY, []);
+  },
+  async analyzeStyleTemplate(input: AnalyzeStyleTemplateInput) {
+    if (input.sampleText.trim().length < 200)
+      throw new Error("样章至少需要 200 字，才能可靠提炼文风");
+    const profile = read<ModelProfile[]>(PROFILES_KEY, []).find(
+      (item) => item.id === input.profileId,
+    );
+    if (!profile) throw new Error("Model profile not found");
+    const key = sessionStorage.getItem(`amy-novel:secret:${profile.id}`) ?? "",
+      response = await fetch(normalizeChatCompletionsUrl(profile.baseUrl), {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          ...(key ? { authorization: `Bearer ${key}` } : {}),
+        },
+        body: JSON.stringify(
+          chatCompletionsRequestBody(profile, styleAnalysisPrompt(input), {
+            maxOutputTokens: 3000,
+            temperature: 0.3,
+            stream: false,
+            thinking: "disabled",
+          }),
+        ),
+        signal: AbortSignal.timeout(180_000),
+      });
+    if (!response.ok)
+      throw new Error(`模型请求失败（HTTP ${response.status}）`);
+    const data = (await response.json()) as {
+        choices?: Array<{ message?: { content?: string } }>;
+      },
+      analysis = parseStyleAnalysis(
+        data.choices?.[0]?.message?.content ?? "",
+      );
+    return this.saveStyleTemplate({
+      name: input.name?.trim() || analysis.name,
+      authorAlias: input.authorAlias?.trim() || analysis.authorAlias,
+      sourceTitle: input.sourceTitle?.trim() || "",
+      sampleText: input.sampleText,
+      contentSummary: analysis.contentSummary,
+      styleSummary: analysis.styleSummary,
+      styleGuide: analysis.styleGuide,
+    });
+  },
+  async saveStyleTemplate(input: SaveStyleTemplateInput) {
+    const list = read<StyleTemplate[]>(STYLE_TEMPLATES_KEY, []),
+      now = new Date().toISOString(),
+      existing = input.id ? list.find((item) => item.id === input.id) : null,
+      item: StyleTemplate = {
+        ...input,
+        id: input.id ?? nanoid(),
+        createdAt: existing?.createdAt ?? now,
+        updatedAt: now,
+      },
+      next = list.some((value) => value.id === item.id)
+        ? list.map((value) => (value.id === item.id ? item : value))
+        : [item, ...list];
+    write(STYLE_TEMPLATES_KEY, next);
+    return item;
+  },
+  async deleteStyleTemplate(id: string) {
+    write(
+      STYLE_TEMPLATES_KEY,
+      read<StyleTemplate[]>(STYLE_TEMPLATES_KEY, []).filter(
+        (item) => item.id !== id,
+      ),
+    );
+  },
   async generateChapter(
     input: GenerateChapterInput,
     onProgress: (event: GenerationProgress) => void,
@@ -1145,7 +1592,15 @@ export const webPlatform: PlatformPort = {
       (item) => item.id === input.profileId,
     );
     if (!profile) throw new Error("Model profile not found");
-    const key = sessionStorage.getItem(`amy-novel:secret:${profile.id}`) ?? "";
+    const template = input.styleTemplateId
+        ? read<StyleTemplate[]>(STYLE_TEMPLATES_KEY, []).find(
+            (item) => item.id === input.styleTemplateId,
+          )
+        : null,
+      prompt = applyStyleTemplate(input.contextText, template),
+      key = sessionStorage.getItem(`amy-novel:secret:${profile.id}`) ?? "";
+    if (input.styleTemplateId && !template)
+      throw new Error("所选文风模板已不存在，请重新选择");
     onProgress({ requestId: input.requestId, type: "started" });
     const response = await fetch(
       normalizeChatCompletionsUrl(profile.baseUrl),
@@ -1156,7 +1611,7 @@ export const webPlatform: PlatformPort = {
           ...(key ? { authorization: `Bearer ${key}` } : {}),
         },
         body: JSON.stringify(
-          chatCompletionsRequestBody(profile, input.contextText, {
+          chatCompletionsRequestBody(profile, prompt, {
             maxOutputTokens: input.maxOutputTokens,
             temperature: input.temperature,
             stream: true,
@@ -1204,7 +1659,7 @@ export const webPlatform: PlatformPort = {
       if (done) break;
     }
     if (buffer) consume(buffer);
-    inputTokens ||= estimateTokens(input.contextText);
+    inputTokens ||= estimateTokens(prompt);
     outputTokens ||= estimateTokens(content);
     const now = new Date().toISOString(),
       candidate: ChapterCandidate = {
@@ -1278,6 +1733,24 @@ export const webPlatform: PlatformPort = {
           updatedAt: new Date().toISOString(),
         };
         write(key, list);
+        const { candidate, pending, batch, job } = reviewWebCandidate(
+          list[index].candidateId,
+        );
+        if (
+          candidate?.status === "accepted" &&
+          !pending &&
+          batch &&
+          job?.status === "completed"
+        )
+          await this.appendGenerationEvent?.({
+            batchId: batch.id,
+            novelId: candidate.novelId,
+            chapterId: candidate.chapterId,
+            stage: "chapter_accepted",
+            level: "success",
+            message: "本章正史建议已全部处理，可以继续生成下一章",
+            data: { candidateId: candidate.id, position: job.position },
+          });
         return list[index];
       }
     }
@@ -1285,6 +1758,80 @@ export const webPlatform: PlatformPort = {
   },
   async cancelGeneration() {
     /* Browser preview stops between chapter checkpoints; Electron aborts immediately. */
+  },
+  async continueChapter(
+    input: ContinueChapterInput,
+  ): Promise<ContinueChapterResult> {
+    const profile = read<ModelProfile[]>(PROFILES_KEY, []).find(
+      (item) => item.id === input.profileId,
+    );
+    if (!profile) throw new Error("Model profile not found");
+    const key = sessionStorage.getItem(`amy-novel:secret:${profile.id}`) ?? "",
+      response = await fetch(normalizeChatCompletionsUrl(profile.baseUrl), {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          ...(key ? { authorization: `Bearer ${key}` } : {}),
+        },
+        body: JSON.stringify(
+          chatCompletionsRequestBody(profile, input.prompt, {
+            maxOutputTokens: input.maxOutputTokens,
+            temperature: input.temperature,
+            stream: false,
+            thinking: "disabled",
+          }),
+        ),
+        signal: AbortSignal.timeout(300_000),
+      });
+    if (!response.ok)
+      throw new Error(`模型请求失败（HTTP ${response.status}）`);
+    const data = (await response.json()) as {
+      choices?: Array<{ message?: { content?: string } }>;
+      usage?: {
+        prompt_tokens?: number;
+        completion_tokens?: number;
+        prompt_tokens_details?: { cached_tokens?: number };
+      };
+    };
+    const content = data.choices?.[0]?.message?.content ?? "";
+    await this.saveUsage({
+      novelId: input.novelId,
+      chapterId: input.chapterId,
+      operation: "generation",
+      provider: profile.provider,
+      model: profile.modelId,
+      inputTokens: data.usage?.prompt_tokens ?? estimateTokens(input.prompt),
+      outputTokens: data.usage?.completion_tokens ?? estimateTokens(content),
+      cachedTokens: data.usage?.prompt_tokens_details?.cached_tokens ?? 0,
+      cost: null,
+      measurement: data.usage ? "provider" : "estimated",
+    });
+    return {
+      content,
+      inputTokens: data.usage?.prompt_tokens ?? estimateTokens(input.prompt),
+      outputTokens: data.usage?.completion_tokens ?? estimateTokens(content),
+      cachedTokens: data.usage?.prompt_tokens_details?.cached_tokens ?? 0,
+    };
+  },
+  async updateChapterCandidateContent(id: string, content: string) {
+    for (const novel of readNovels()) {
+      for (const chapter of await this.listChapters(novel.id)) {
+        const list = read<ChapterCandidate[]>(candidatesKey(chapter.id), []),
+          index = list.findIndex((item) => item.id === id);
+        if (index < 0) continue;
+        if (list[index].status !== "candidate")
+          throw new Error("候选稿已处理，不能再修改；请重新生成");
+        list[index] = {
+          ...list[index],
+          content,
+          wordCount: content.replace(/\s+/g, "").length,
+          updatedAt: new Date().toISOString(),
+        };
+        write(candidatesKey(chapter.id), list);
+        return list[index];
+      }
+    }
+    throw new Error("Candidate not found");
   },
   async acceptChapterCandidate(id: string) {
     for (const novel of readNovels()) {
@@ -1315,6 +1862,24 @@ export const webPlatform: PlatformPort = {
               : value,
           ),
         );
+        const { pending, batch, job } = reviewWebCandidate(id);
+        if (batch && job) {
+          await this.appendGenerationEvent?.({
+            batchId: batch.id,
+            novelId: novel.id,
+            chapterId: chapter.id,
+            stage: "chapter_accepted",
+            level: "success",
+            message: pending
+              ? `候选稿已写入正史；处理完 ${pending} 条正史建议后才能继续下一章`
+              : "候选稿及正史建议均已处理，可以继续生成下一章",
+            data: {
+              candidateId: id,
+              position: job.position,
+              pendingProposals: pending,
+            },
+          });
+        }
         return item;
       }
     }
@@ -1501,7 +2066,13 @@ export const webPlatform: PlatformPort = {
   },
   async listCharacterStates(novelId: string, characterId?: string) {
     const list = read<CharacterState[]>(characterStatesKey(novelId), []).map(
-      (item) => ({ ...item, skills: item.skills ?? [] }),
+      (item) => ({
+        ...item,
+        appearance: item.appearance ?? "",
+        outfit: item.outfit ?? "",
+        identity: item.identity ?? "",
+        skills: item.skills ?? [],
+      }),
     );
     return characterId
       ? list.filter((item) => item.characterId === characterId)
@@ -1518,6 +2089,9 @@ export const webPlatform: PlatformPort = {
         chapterId: input.chapterId,
         summary: input.summary,
         location: input.location,
+        appearance: input.appearance ?? "",
+        outfit: input.outfit ?? "",
+        identity: input.identity ?? "",
         physical: input.physical,
         emotional: input.emotional,
         knowledge: normalizeStateList(input.knowledge),
@@ -1562,13 +2136,13 @@ export const webPlatform: PlatformPort = {
     ]);
     const cycle = cycles.find(
       (item) =>
-        item.startChapter === policy.startChapter &&
-        item.endChapter === policy.endChapter &&
+        policy.startChapter >= item.startChapter &&
+        policy.endChapter <= item.endChapter &&
         ["ready", "generating"].includes(item.status),
     );
     if (!cycle)
       throw new Error(
-        `第 ${policy.startChapter}–${policy.endChapter} 章策划包尚未通过一致性检查`,
+        `第 ${policy.startChapter}–${policy.endChapter} 章不在已通过一致性检查的策划包范围内`,
       );
     assertPlanningReady({
       novel,
@@ -1589,6 +2163,7 @@ export const webPlatform: PlatformPort = {
         status: "queued",
         policy,
         outputTokensUsed: 0,
+        awaitingReview: false,
         createdAt: now,
         updatedAt: now,
       },
@@ -1616,18 +2191,42 @@ export const webPlatform: PlatformPort = {
     return { id, estimate: estimateGeneration(policy) };
   },
   async listGenerationBatches() {
-    return read<GenerationBatch[]>(BATCHES_KEY, []);
+    return read<GenerationBatch[]>(BATCHES_KEY, []).map((item) => ({
+      ...item,
+      awaitingReview: item.awaitingReview ?? false,
+    }));
   },
   async listGenerationJobs(id: string) {
     return read<GenerationJob[]>(jobsKey(id), []);
   },
-  async setBatchStatus(id: string, status: GenerationBatch["status"]) {
+  async listGenerationEvents(batchId: string) {
+    return read<GenerationEvent[]>(eventsKey(batchId), []);
+  },
+  async appendGenerationEvent(input: NewGenerationEvent) {
+    const event: GenerationEvent = {
+      id: nanoid(),
+      createdAt: new Date().toISOString(),
+      ...input,
+      data: input.data ?? {},
+    };
+    write(eventsKey(input.batchId), [
+      event,
+      ...read<GenerationEvent[]>(eventsKey(input.batchId), []),
+    ]);
+    return event;
+  },
+  async setBatchStatus(
+    id: string,
+    status: GenerationBatch["status"],
+    patch?: { awaitingReview?: boolean },
+  ) {
     const list = read<GenerationBatch[]>(BATCHES_KEY, []),
       index = list.findIndex((item) => item.id === id);
     if (index < 0) throw new Error("Batch not found");
     list[index] = {
       ...list[index],
       status,
+      awaitingReview: patch?.awaitingReview ?? false,
       updatedAt: new Date().toISOString(),
     };
     write(BATCHES_KEY, list);

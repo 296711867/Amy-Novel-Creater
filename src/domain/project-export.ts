@@ -17,6 +17,7 @@ import type { PlanningWorkflow } from "./planning-workflow";
 import type { PlanningRun } from "./planning-run";
 import type { PlanningCycle } from "./planning-cycle";
 import type { PlanningProposal } from "./planning-proposal";
+import { scopeAdviceSchema } from "./scope-advisor";
 import { z } from "zod";
 
 export interface NovelProjectBundle {
@@ -238,6 +239,7 @@ const planningBriefSchema = z.object({
 });
 const workflowSchema = z.object({
   novelId: text,
+  scopeAdvice: scopeAdviceSchema.nullable().optional().default(null),
   brief: planningBriefSchema,
   confirmedSteps: z.array(z.number().int().min(1).max(9)),
   updatedAt: text,
@@ -247,7 +249,8 @@ const planningRunSchema = z.object({
   phase: z.enum(["bible", "structure", "cast", "scenes"]),
   startChapter: z.number().nullable(), endChapter: z.number().nullable(),
   profileId: text, provider: text, model: text, promptHash: text,
-  rawResponse: text, inputTokens: z.number(), outputTokens: z.number(),
+  rawResponse: text, repairResponse: text.optional().default(""),
+  inputTokens: z.number(), outputTokens: z.number(),
   cachedTokens: z.number(),
   status: z.enum(["running", "received", "completed", "failed"]),
   error: text, createdAt: text, updatedAt: text,
@@ -260,8 +263,9 @@ const planningCycleSchema = z.object({
 });
 const planningProposalSchema = z.object({
   id: text, novelId: text, cycleId: text, startChapter: z.number(), endChapter: z.number(),
-  action: z.enum(["add", "update"]),
+  action: z.enum(["add", "update", "merge"]),
   targetType: z.enum(["character", "location", "organization", "item", "term"]),
+  targetRef: text.optional(),
   targetName: text,
   patch: z.object({ summary: text.optional(), aliases: strings.optional(), profile: z.record(text, text).optional() }),
   reason: text, status: z.enum(["pending", "accepted", "rejected"]),

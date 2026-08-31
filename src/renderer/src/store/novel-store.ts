@@ -7,12 +7,15 @@ import type {
   SaveChapterInput,
 } from "@domain/novel";
 import {
+  approvalGateEnabled,
   nextRunnableJob,
   retryDelayMs,
   waitForRetry,
   type GenerationBatch,
+  type GenerationEvent,
   type GenerationJob,
   type GenerationPolicy,
+  type NewGenerationEvent,
 } from "@domain/generation";
 import { nanoid } from "nanoid";
 import { platform } from "@renderer/platform/web-platform";
@@ -40,6 +43,7 @@ import type {
 import type { CreateChapterInput, UpdateChapterPlanInput } from "@domain/novel";
 import {
   buildContextPack,
+  selectCharacterStates,
   selectRecentChapters,
   type ContextPack,
 } from "@domain/context-pack";
@@ -55,6 +59,11 @@ import type {
   GenerateChapterInput,
   GenerationProgress,
 } from "@domain/chapter-generation";
+import {
+  continuationPrompt,
+  mergeContinuation,
+} from "@domain/chapter-generation";
+import { countCjkWords } from "@domain/novel";
 import type { FactProposal, StoredFinding } from "@domain/quality-check";
 import { assertCandidateAcceptedForCanon } from "@domain/quality-check";
 import { parseProposalPayload } from "@domain/fact-extraction";
@@ -82,6 +91,19 @@ import {
   type PlanningReviewStep,
   type PlanningWorkflow,
 } from "@domain/planning-workflow";
+import type {
+  AnalyzeStyleTemplateInput,
+  SaveStyleTemplateInput,
+  StyleTemplate,
+} from "@domain/style-template";
+import { applyStyleTemplate } from "@domain/style-template";
+import type { PersonaSuggestion } from "@domain/persona-recommendation";
+import type {
+  WorkflowMode,
+  WorkflowRun,
+} from "@domain/workflow-run";
+import { workflowRunUpdateFromBatch } from "@domain/workflow-run";
+import { resumeWorkflowRun } from "@application/run-workflow";
 
 interface NovelState {
   novels: Novel[];
@@ -97,25 +119,29 @@ interface NovelState {
   contextPacks: Record<string, ContextPack[]>;
   usage: UsageRecord[];
   modelProfiles: ModelProfile[];
+  styleTemplates: StyleTemplate[];
   candidates: Record<string, ChapterCandidate[]>;
   batches: GenerationBatch[];
   jobs: Record<string, GenerationJob[]>;
+  /** 批次运行日志（作者视图）：batchId -> 事件流。 */
+  activityEvents: Record<string, GenerationEvent[]>;
   findings: Record<string, StoredFinding[]>;
   factProposals: Record<string, FactProposal[]>;
   planningWorkflows: Record<string, PlanningWorkflow>;
   planningRuns: Record<string, PlanningRun[]>;
   planningCycles: Record<string, PlanningCycle[]>;
   planningProposals: Record<string, PlanningProposal[]>;
+  workflowRuns: Record<string, WorkflowRun[]>;
+  /** 人格推荐草稿（novelId -> 全阵容建议）：确认前不写正式设定。 */
+  personaDrafts: Record<string, PersonaSuggestion[]>;
+  personaBusy: Record<string, boolean>;
+  personaMessage: Record<string, string>;
   /** 进行中的规划阶段（novelId -> phase）；挂在 store 上，切换页面不丢失。 */
   planningBusy: Record<string, PlanPhase | null>;
   /** 最近一次规划的结果或错误文案，供页面重新挂载后回显。 */
   planningMessage: Record<string, string>;
   /** 单章生成中的请求（chapterId -> 请求信息）；防止切页回来重复发起。 */
   activeRequests: Record<string, { requestId: string; startedAt: number }>;
-  /** 开书前的篇幅建议（创建页使用，不落库）。 */
-  scopeAdvice: ScopeAdvice | null;
-  scopeAdviceBusy: boolean;
-  scopeAdviceError: string;
   /** 第 1–2 步七项简报的 AI 草稿：切页不丢，作者确认后写入工作流。 */
   draftedBrief: PlanningBrief | null;
   briefDraftBusy: boolean;
@@ -125,8 +151,22 @@ interface NovelState {
     genre: string;
     premise: string;
     notes?: string;
-  }): Promise<ScopeAdvice | null>;
-  clearScopeAdvice(): void;
+  }): Promise<ScopeAdvice>;
+  /** Amy 一次推荐整个人物阵容的人格；结果进草稿，作者批量确认后写入。 */
+  suggestPersonas(novelId: string): Promise<PersonaSuggestion[] | null>;
+  confirmPersonas(
+    novelId: string,
+    suggestions: PersonaSuggestion[],
+  ): Promise<number>;
+  /** 订阅主进程推送的生成事件（Electron）；Web 端为空操作。 */
+  ensureActivityListener(): void;
+  loadActivity(batchId: string): Promise<GenerationEvent[]>;
+  appendActivity(event: GenerationEvent): void;
+  updatePersonaDraft(
+    novelId: string,
+    entityName: string,
+    patch: Partial<PersonaSuggestion>,
+  ): void;
   suggestBrief(input: {
     title: string;
     genre: string;
@@ -139,7 +179,7 @@ interface NovelState {
   initialized: boolean;
   loadNovels(): Promise<void>;
   deleteNovel(novelId: string): Promise<void>;
-  createNovel(input: CreateNovelInput): Promise<Novel>;
+  createNovel(input: CreateNovelInput, scopeAdvice?: ScopeAdvice): Promise<Novel>;
   updateNovelSettings(
     novelId: string,
     patch: { cycleSize: number },
@@ -172,6 +212,14 @@ interface NovelState {
     proposalId: string,
     accept: boolean,
   ): Promise<PlanningProposal>;
+  loadWorkflowRuns(novelId: string): Promise<WorkflowRun[]>;
+  startWorkflowRun(
+    novelId: string,
+    mode: WorkflowMode,
+    policy: GenerationPolicy,
+  ): Promise<WorkflowRun>;
+  resumeWorkflowRun(runId: string): Promise<WorkflowRun>;
+  syncWorkflowRunFromBatch(batchId: string): Promise<void>;
   loadChapters(novelId: string): Promise<Chapter[]>;
   getChapter(chapterId: string): Promise<Chapter | null>;
   saveChapter(input: SaveChapterInput): Promise<Chapter>;
@@ -204,11 +252,25 @@ interface NovelState {
   saveModelProfile(input: SaveModelProfileInput): Promise<ModelProfile>;
   deleteModelProfile(id: string): Promise<void>;
   testModelConnection(id: string, key?: string): Promise<ModelConnectionResult>;
+  loadStyleTemplates(): Promise<StyleTemplate[]>;
+  analyzeStyleTemplate(input: AnalyzeStyleTemplateInput): Promise<StyleTemplate>;
+  saveStyleTemplate(input: SaveStyleTemplateInput): Promise<StyleTemplate>;
+  deleteStyleTemplate(id: string): Promise<void>;
   generateChapter(
     input: GenerateChapterInput,
     onProgress: (event: GenerationProgress) => void,
   ): Promise<ChapterCandidate>;
   loadCandidates(chapterId: string): Promise<ChapterCandidate[]>;
+  /** 作者改稿：候选态下保存修改，接受时写入改后版本。 */
+  editCandidateContent(
+    candidateId: string,
+    content: string,
+  ): Promise<ChapterCandidate>;
+  /** 失败任务重新排队并恢复批次。 */
+  retryGenerationJob(batchId: string, jobId: string): Promise<void>;
+  retryFailedJobs(batchId: string): Promise<number>;
+  /** 前文变化后作废当前候选稿并重写本章。 */
+  regenerateGenerationJob(batchId: string, jobId: string): Promise<void>;
   reviewCandidate(
     candidateId: string,
     accept: boolean,
@@ -218,6 +280,7 @@ interface NovelState {
   setBatchStatus(
     batchId: string,
     status: GenerationBatch["status"],
+    patch?: { awaitingReview?: boolean },
   ): Promise<void>;
   runBatch(
     batchId: string,
@@ -256,10 +319,18 @@ interface NovelState {
 }
 const activeChapterRequests = new Map<string, string>();
 const activeBatchRequests = new Set<string>();
+let activityListenerBound = false;
 function omitKey<T>(record: Record<string, T>, key: string): Record<string, T> {
   const next = { ...record };
   delete next[key];
   return next;
+}
+
+function modelErrorMessage(error: unknown, fallback: string): string {
+  const message = error instanceof Error ? error.message : "";
+  return /timeout|timed out|aborted|超时/i.test(message)
+    ? "模型等待超时，请检查连接或更换模型后重试"
+    : message || fallback;
 }
 
 export const useNovelStore = create<NovelState>((set, get) => ({
@@ -276,41 +347,29 @@ export const useNovelStore = create<NovelState>((set, get) => ({
   contextPacks: {},
   usage: [],
   modelProfiles: [],
+  styleTemplates: [],
   candidates: {},
   batches: [],
   jobs: {},
+  activityEvents: {},
   findings: {},
   factProposals: {},
   planningWorkflows: {},
   planningRuns: {},
   planningCycles: {},
   planningProposals: {},
+  workflowRuns: {},
+  personaDrafts: {},
+  personaBusy: {},
+  personaMessage: {},
   planningBusy: {},
   planningMessage: {},
   activeRequests: {},
-  scopeAdvice: null,
-  scopeAdviceBusy: false,
-  scopeAdviceError: "",
   draftedBrief: null,
   briefDraftBusy: false,
   briefDraftError: "",
   async suggestScope(input) {
-    set({ scopeAdviceBusy: true, scopeAdviceError: "" });
-    try {
-      const advice = await platform.suggestNovelScope(input);
-      set({ scopeAdvice: advice, scopeAdviceBusy: false });
-      return advice;
-    } catch (error) {
-      set({
-        scopeAdviceBusy: false,
-        scopeAdviceError:
-          error instanceof Error ? error.message : "篇幅建议生成失败",
-      });
-      return null;
-    }
-  },
-  clearScopeAdvice() {
-    set({ scopeAdvice: null, scopeAdviceError: "" });
+    return platform.suggestNovelScope(input);
   },
   async suggestBrief(input) {
     set({ briefDraftBusy: true, briefDraftError: "" });
@@ -321,14 +380,108 @@ export const useNovelStore = create<NovelState>((set, get) => ({
     } catch (error) {
       set({
         briefDraftBusy: false,
-        briefDraftError:
-          error instanceof Error ? error.message : "简报起草失败",
+        briefDraftError: modelErrorMessage(error, "简报起草失败"),
       });
       return null;
     }
   },
   clearDraftedBrief() {
     set({ draftedBrief: null, briefDraftError: "" });
+  },
+  async suggestPersonas(novelId) {
+    set({
+      personaBusy: { ...get().personaBusy, [novelId]: true },
+      personaMessage: { ...get().personaMessage, [novelId]: "" },
+    });
+    try {
+      const suggestions = await platform.suggestPersonaLineup(novelId);
+      set({
+        personaDrafts: { ...get().personaDrafts, [novelId]: suggestions },
+        personaBusy: { ...get().personaBusy, [novelId]: false },
+      });
+      return suggestions;
+    } catch (error) {
+      set({
+        personaBusy: { ...get().personaBusy, [novelId]: false },
+        personaMessage: {
+          ...get().personaMessage,
+          [novelId]: `人格推荐失败：${modelErrorMessage(error, "未知错误")}`,
+        },
+      });
+      return null;
+    }
+  },
+  updatePersonaDraft(novelId, entityName, patch) {
+    const list = get().personaDrafts[novelId] ?? [];
+    set({
+      personaDrafts: {
+        ...get().personaDrafts,
+        [novelId]: list.map((item) =>
+          item.entityName === entityName ? { ...item, ...patch } : item,
+        ),
+      },
+    });
+  },
+  async confirmPersonas(novelId, suggestions) {
+    const entities = await platform.listStoryEntities(novelId);
+    let written = 0;
+    for (const suggestion of suggestions) {
+      const entity = entities.find(
+        (item) =>
+          item.type === "character" &&
+          (item.name === suggestion.entityName ||
+            item.aliases.includes(suggestion.entityName)),
+      );
+      if (!entity) continue;
+      await platform.saveStoryEntity({
+        id: entity.id,
+        novelId,
+        type: "character",
+        name: entity.name,
+        summary: entity.summary,
+        aliases: entity.aliases,
+        profile: {
+          ...entity.profile,
+          人格: suggestion.personaType,
+          人格推荐理由: suggestion.reason,
+          写作约束: suggestion.writingConstraints,
+          ...(suggestion.speechHabit.trim()
+            ? { 语言习惯: suggestion.speechHabit }
+            : {}),
+        },
+      });
+      written++;
+    }
+    await get().loadEntities(novelId);
+    set({ personaDrafts: { ...get().personaDrafts, [novelId]: [] } });
+    return written;
+  },
+  ensureActivityListener() {
+    if (activityListenerBound || !platform.onGenerationEvent) return;
+    activityListenerBound = true;
+    platform.onGenerationEvent((event) => get().appendActivity(event));
+  },
+  async loadActivity(batchId) {
+    const events = await platform.listGenerationEvents(batchId);
+    set({ activityEvents: { ...get().activityEvents, [batchId]: events } });
+    return events;
+  },
+  appendActivity(event) {
+    const list = get().activityEvents[event.batchId] ?? [];
+    if (list.some((item) => item.id === event.id)) return;
+    set({
+      activityEvents: {
+        ...get().activityEvents,
+        [event.batchId]: [...list, event].slice(-300),
+      },
+    });
+    // 批次级停点/终点事件到达时，同步收敛挂在该批次上的 workflow run。
+    if (
+      event.stage === "batch_completed" ||
+      event.stage === "batch_paused" ||
+      event.stage === "awaiting_review"
+    )
+      void get().syncWorkflowRunFromBatch(event.batchId);
   },
   setPlanningMessage(novelId, message) {
     set({
@@ -347,7 +500,12 @@ export const useNovelStore = create<NovelState>((set, get) => ({
   },
   async deleteNovel(id) {
     await platform.deleteNovel(id);
-    const state = get();
+    const state = get(),
+      removedBatchIds = state.batches
+        .filter((item) => item.novelId === id)
+        .map((item) => item.id),
+      activityEvents = { ...state.activityEvents };
+    for (const batchId of removedBatchIds) delete activityEvents[batchId];
     set({
       novels: state.novels.filter((item) => item.id !== id),
       batches: state.batches.filter((item) => item.novelId !== id),
@@ -364,19 +522,30 @@ export const useNovelStore = create<NovelState>((set, get) => ({
       planningRuns: omitKey(state.planningRuns, id),
       planningCycles: omitKey(state.planningCycles, id),
       planningProposals: omitKey(state.planningProposals, id),
+      workflowRuns: omitKey(state.workflowRuns, id),
       planningBusy: omitKey(state.planningBusy, id),
       planningMessage: omitKey(state.planningMessage, id),
+      personaDrafts: omitKey(state.personaDrafts, id),
+      personaBusy: omitKey(state.personaBusy, id),
+      personaMessage: omitKey(state.personaMessage, id),
+      activityEvents,
       usage: state.usage.filter((item) => item.novelId !== id),
     });
   },
-  async createNovel(input) {
+  async createNovel(input, scopeAdvice) {
     const result = await platform.createNovel(input);
+    const workflow = scopeAdvice
+      ? await platform.savePlanningWorkflow({
+          ...defaultPlanningWorkflow(result.novel.id),
+          scopeAdvice,
+        })
+      : defaultPlanningWorkflow(result.novel.id);
     set({
       novels: [result.novel, ...get().novels],
       chapters: { ...get().chapters, [result.novel.id]: result.chapters },
       planningWorkflows: {
         ...get().planningWorkflows,
-        [result.novel.id]: defaultPlanningWorkflow(result.novel.id),
+        [result.novel.id]: workflow,
       },
     });
     return result.novel;
@@ -487,7 +656,7 @@ export const useNovelStore = create<NovelState>((set, get) => ({
       set({
         planningMessage: {
           ...get().planningMessage,
-          [novelId]: `生成失败：${error instanceof Error ? error.message : "未知错误"}`,
+          [novelId]: `生成失败：${modelErrorMessage(error, "未知错误")}`,
         },
       });
       throw error;
@@ -528,6 +697,80 @@ export const useNovelStore = create<NovelState>((set, get) => ({
       },
     });
     return proposals;
+  },
+  async loadWorkflowRuns(novelId) {
+    const runs = await platform.listWorkflowRuns(novelId);
+    set({ workflowRuns: { ...get().workflowRuns, [novelId]: runs } });
+    return runs;
+  },
+  async startWorkflowRun(novelId, mode, policy) {
+    const run = await platform.createWorkflowRun({
+      novelId,
+      mode,
+      config: { generationPolicy: policy, maxPhaseRetries: 2 },
+    });
+    set({
+      workflowRuns: {
+        ...get().workflowRuns,
+        [novelId]: [run, ...(get().workflowRuns[novelId] ?? [])],
+      },
+    });
+    return get().resumeWorkflowRun(run.id);
+  },
+  async resumeWorkflowRun(runId) {
+    const run = Object.values(get().workflowRuns)
+      .flat()
+      .find((item) => item.id === runId);
+    if (!run) throw new Error("Workflow run 不存在");
+    const running = { ...run, status: "running" as const, error: "" };
+    set({
+      workflowRuns: {
+        ...get().workflowRuns,
+        [run.novelId]: (get().workflowRuns[run.novelId] ?? []).map((item) =>
+          item.id === run.id ? running : item,
+        ),
+      },
+    });
+    const result = await resumeWorkflowRun(
+      {
+        ...platform,
+        startBackgroundBatch: (batchId) => get().dispatchBatch(batchId),
+      },
+      run,
+    );
+    await Promise.all([
+      get().loadWorkflowRuns(run.novelId),
+      get().loadPlanningWorkflow(run.novelId),
+      get().loadPlanningRuns(run.novelId),
+      get().loadPlanningCycles(run.novelId),
+      get().loadPlanningProposals(run.novelId),
+      get().loadChapters(run.novelId),
+      get().loadBible(run.novelId),
+      get().loadEntities(run.novelId),
+      get().loadStructure(run.novelId),
+      get().loadBatches(),
+    ]);
+    return result;
+  },
+  /** 批次事件到达时把后台批次状态收敛回运行中的 workflow run（Electron 后台执行路径）。 */
+  async syncWorkflowRunFromBatch(batchId) {
+    const run = Object.values(get().workflowRuns)
+      .flat()
+      .find((item) => item.batchId === batchId && item.status === "running");
+    if (!run) return;
+    const batches = await platform.listGenerationBatches();
+    const batch = batches.find((item) => item.id === batchId);
+    const update = batch ? workflowRunUpdateFromBatch(batch) : null;
+    if (!update) return;
+    const next = await platform.updateWorkflowRun({ id: run.id, ...update });
+    set({
+      workflowRuns: {
+        ...get().workflowRuns,
+        [run.novelId]: (get().workflowRuns[run.novelId] ?? []).map((item) =>
+          item.id === run.id ? next : item,
+        ),
+      },
+    });
   },
   async reviewPlanningProposal(novelId, proposalId, accept) {
     const proposal = await platform.reviewPlanningProposal(
@@ -747,7 +990,11 @@ export const useNovelStore = create<NovelState>((set, get) => ({
         );
       }),
       foreshadow: state.foreshadowThreads[novelId] ?? [],
-      characterStates: state.characterStates[novelId] ?? [],
+      characterStates: selectCharacterStates(
+        state.characterStates[novelId] ?? [],
+        new Map(chapters.map((item) => [item.id, item.position])),
+        chapter.position,
+      ),
       recentChapters: recent,
       inputBudget,
       outputTokensReserved: outputReserved,
@@ -811,6 +1058,30 @@ export const useNovelStore = create<NovelState>((set, get) => ({
     });
   },
   testModelConnection: (id, key) => platform.testModelConnection(id, key),
+  async loadStyleTemplates() {
+    const styleTemplates = await platform.listStyleTemplates();
+    set({ styleTemplates });
+    return styleTemplates;
+  },
+  async analyzeStyleTemplate(input) {
+    const item = await platform.analyzeStyleTemplate(input);
+    set({ styleTemplates: [item, ...get().styleTemplates] });
+    return item;
+  },
+  async saveStyleTemplate(input) {
+    const item = await platform.saveStyleTemplate(input),
+      list = get().styleTemplates;
+    set({
+      styleTemplates: list.some((value) => value.id === item.id)
+        ? list.map((value) => (value.id === item.id ? item : value))
+        : [item, ...list],
+    });
+    return item;
+  },
+  async deleteStyleTemplate(id) {
+    await platform.deleteStyleTemplate(id);
+    set({ styleTemplates: get().styleTemplates.filter((item) => item.id !== id) });
+  },
   async generateChapter(input, onProgress) {
     activeChapterRequests.set(input.chapterId, input.requestId);
     set({
@@ -843,6 +1114,54 @@ export const useNovelStore = create<NovelState>((set, get) => ({
     const items = await platform.listChapterCandidates(chapterId);
     set({ candidates: { ...get().candidates, [chapterId]: items } });
     return items;
+  },
+  async editCandidateContent(candidateId, content) {
+    const item = await platform.updateChapterCandidateContent(
+      candidateId,
+      content,
+    );
+    const list = get().candidates[item.chapterId] ?? [];
+    set({
+      candidates: {
+        ...get().candidates,
+        [item.chapterId]: list.map((value) =>
+          value.id === item.id ? item : value,
+        ),
+      },
+    });
+    return item;
+  },
+  async retryGenerationJob(batchId, jobId) {
+    await platform.updateGenerationJob(jobId, "queued", {
+      attempt: 0,
+      error: "",
+    });
+    await get().setBatchStatus(batchId, "queued");
+    await get().dispatchBatch(batchId);
+  },
+  async retryFailedJobs(batchId) {
+    const jobs = get().jobs[batchId] ?? (await get().loadJobs(batchId));
+    const failed = jobs.filter((item) => item.status === "failed");
+    for (const job of failed)
+      await platform.updateGenerationJob(job.id, "queued", {
+        attempt: 0,
+        error: "",
+      });
+    if (failed.length) {
+      await get().setBatchStatus(batchId, "queued");
+      await get().dispatchBatch(batchId);
+    }
+    return failed.length;
+  },
+  async regenerateGenerationJob(batchId, jobId) {
+    // 旧候选稿保留在历史里用于追溯；清空任务指向后按最新正史重写本章。
+    await platform.updateGenerationJob(jobId, "queued", {
+      candidateId: null,
+      attempt: 0,
+      error: "",
+    });
+    await get().setBatchStatus(batchId, "queued");
+    await get().dispatchBatch(batchId);
   },
   async reviewCandidate(id, accept) {
     const item = accept
@@ -881,11 +1200,17 @@ export const useNovelStore = create<NovelState>((set, get) => ({
     set({ jobs: { ...get().jobs, [batchId]: items } });
     return items;
   },
-  async setBatchStatus(id, status) {
-    if (status === "paused" && platform.host === "electron")
+  async setBatchStatus(id, status, patch) {
+    if (
+      (status === "paused" || status === "cancelled") &&
+      platform.host === "electron"
+    ) {
+      // 先中断运行器（会写入 paused），再落最终状态。
       await platform.pauseBackgroundBatch(id);
-    else {
-      if (status === "paused") {
+      if (status === "cancelled")
+        await platform.setBatchStatus(id, "cancelled");
+    } else {
+      if (status === "paused" || status === "cancelled") {
         const current = (get().jobs[id] ?? []).find(
             (item) => item.status === "generating",
           ),
@@ -894,7 +1219,7 @@ export const useNovelStore = create<NovelState>((set, get) => ({
             : undefined;
         if (requestId) await platform.cancelGeneration(requestId);
       }
-      await platform.setBatchStatus(id, status);
+      await platform.setBatchStatus(id, status, patch);
     }
     await get().loadBatches();
   },
@@ -990,6 +1315,9 @@ export const useNovelStore = create<NovelState>((set, get) => ({
           chapterId: chapter.id,
           summary: parsed.payload.summary,
           location: parsed.payload.location,
+          appearance: parsed.payload.appearance,
+          outfit: parsed.payload.outfit,
+          identity: parsed.payload.identity,
           physical: parsed.payload.physical,
           emotional: parsed.payload.emotional,
           knowledge: parsed.payload.knowledge,
@@ -1102,7 +1430,27 @@ export const useNovelStore = create<NovelState>((set, get) => ({
         : await get().loadModelProfiles(),
       profile = profiles.find((item) => item.isDefault) ?? profiles[0];
     if (!profile) throw new Error("请先在设置中配置默认模型");
+    const gate = approvalGateEnabled(batch.policy),
+      // Web 端批次在渲染进程执行：过程事件直接写本地并进入活动日志。
+      emit = async (input: NewGenerationEvent) => {
+        const event = await platform.appendGenerationEvent?.(input);
+        if (event) get().appendActivity(event);
+      };
     await get().setBatchStatus(batchId, "running");
+    await emit({
+      batchId,
+      novelId: batch.novelId,
+      chapterId: null,
+      stage: "batch_started",
+      level: "info",
+      message: `批次启动：第 ${batch.policy.startChapter}–${batch.policy.endChapter} 章，模型 ${profile.modelId}${gate ? "，单章审批制（每章确认后才写下一章）" : ""}`,
+      data: {
+        model: profile.modelId,
+        provider: profile.provider,
+        approvalGate: gate,
+        outputTokenBudget: batch.policy.outputTokenBudget,
+      },
+    });
     let jobs = await get().loadJobs(batchId);
     while (true) {
       const currentBatch = get().batches.find((item) => item.id === batchId);
@@ -1111,6 +1459,29 @@ export const useNovelStore = create<NovelState>((set, get) => ({
         currentBatch?.status === "cancelled"
       )
         return;
+      // 审批门：前面的章节全部确认为正史后，才允许生成本章。
+      const nextPosition = nextRunnableJob(jobs)?.position ?? Infinity,
+        blocking = [...jobs]
+          .sort((a, b) => a.position - b.position)
+          .find(
+            (item) =>
+              item.position < nextPosition && item.status === "candidate_ready",
+          );
+      if (gate && blocking) {
+        await get().setBatchStatus(batchId, "paused", {
+          awaitingReview: true,
+        });
+        await emit({
+          batchId,
+          novelId: batch.novelId,
+          chapterId: blocking.chapterId,
+          stage: "awaiting_review",
+          level: "info",
+          message: "上一章候选稿尚未确认为正史，已暂停等待审核",
+          data: { position: blocking.position },
+        });
+        return;
+      }
       const job = nextRunnableJob(jobs);
       if (!job) break;
       if (
@@ -1118,18 +1489,38 @@ export const useNovelStore = create<NovelState>((set, get) => ({
         currentBatch.outputTokensUsed >= currentBatch.policy.outputTokenBudget
       ) {
         await get().setBatchStatus(batchId, "paused");
+        await emit({
+          batchId,
+          novelId: batch.novelId,
+          chapterId: null,
+          stage: "batch_paused",
+          level: "warning",
+          message: `已达到单批输出预算 ${currentBatch.policy.outputTokenBudget.toLocaleString()} tokens，安全暂停`,
+          data: { outputTokensUsed: currentBatch.outputTokensUsed },
+        });
         return;
       }
       try {
+        const chapterList = (get().chapters[batch.novelId] ?? []).length
+            ? get().chapters[batch.novelId]
+            : await get().loadChapters(batch.novelId),
+          chapter = chapterList.find((item) => item.id === job.chapterId);
+        if (chapter)
+          await emit({
+            batchId,
+            novelId: batch.novelId,
+            chapterId: chapter.id,
+            stage: "context_build",
+            level: "info",
+            message: `正在整理第 ${chapter.position} 章上下文`,
+            data: { position: chapter.position, attempt: job.attempt + 1 },
+          });
         await platform.updateGenerationJob(job.id, "building_context", {
           attempt: job.attempt + 1,
           error: "",
         });
         jobs = await get().loadJobs(batchId);
-        const chapterList = (get().chapters[batch.novelId] ?? []).length
-            ? get().chapters[batch.novelId]
-            : await get().loadChapters(batch.novelId),
-          candidateChain = jobs
+        const candidateChain = jobs
             .filter((item) => item.position < job.position && item.candidateId)
             .flatMap((item) => {
               const chapter = chapterList.find(
@@ -1167,8 +1558,33 @@ export const useNovelStore = create<NovelState>((set, get) => ({
           output,
           candidateChain,
         );
+        await emit({
+          batchId,
+          novelId: batch.novelId,
+          chapterId: job.chapterId,
+          stage: "context_build",
+          level: "success",
+          message: `上下文就绪：约 ${pack.inputTokens.toLocaleString()} tokens`,
+          data: { inputTokens: pack.inputTokens, sources: pack.sources.length },
+        });
         await platform.updateGenerationJob(job.id, "generating");
-        const candidate = await get().generateChapter(
+        if (chapter)
+          await emit({
+            batchId,
+            novelId: batch.novelId,
+            chapterId: chapter.id,
+            stage: "generating",
+            level: "info",
+            message: `正在生成第 ${chapter.position} 章正文（第 ${job.attempt + 1} 次尝试），目标 ${chapter.targetWords} 字`,
+            data: {
+              position: chapter.position,
+              attempt: job.attempt + 1,
+              maxOutputTokens: output,
+              model: profile.modelId,
+            },
+          });
+        const generationStartAt = Date.now();
+        let candidate = await get().generateChapter(
           {
             requestId: nanoid(),
             novelId: batch.novelId,
@@ -1178,11 +1594,100 @@ export const useNovelStore = create<NovelState>((set, get) => ({
             contextHash: pack.contentHash,
             maxOutputTokens: output,
             temperature: 0.8,
+            styleTemplateId: batch.policy.styleTemplateId,
           },
           (event) => {
             if (event.delta) onDelta?.(job.chapterId, event.delta);
           },
         );
+        await emit({
+          batchId,
+          novelId: batch.novelId,
+          chapterId: job.chapterId,
+          stage: "candidate_saved",
+          level: "success",
+          message: `候选稿已保存：${candidate.wordCount} 字，输出 ${candidate.outputTokens.toLocaleString()} tokens`,
+          data: {
+            candidateId: candidate.id,
+            wordCount: candidate.wordCount,
+            inputTokens: candidate.inputTokens,
+            outputTokens: candidate.outputTokens,
+            durationMs: Date.now() - generationStartAt,
+            model: profile.modelId,
+          },
+        });
+        // 字数不足（多为 max_tokens 截断）：同一上下文补写一次，不整章重写。
+        if (
+          chapter &&
+          countCjkWords(candidate.content) < chapter.targetWords * 0.6
+        ) {
+          await emit({
+            batchId,
+            novelId: batch.novelId,
+            chapterId: chapter.id,
+            stage: "generating",
+            level: "warning",
+            message: `字数不足（${candidate.wordCount} 字 / 目标 ${chapter.targetWords} 字），正在补写`,
+            data: { wordCount: candidate.wordCount, target: chapter.targetWords },
+          });
+          try {
+            const styledContext = applyStyleTemplate(
+              pack.renderedText,
+              batch.policy.styleTemplateId
+                ? (get().styleTemplates.find(
+                    (item) => item.id === batch.policy.styleTemplateId,
+                  ) ?? null)
+                : null,
+            );
+            const continuation = await platform.continueChapter({
+              requestId: nanoid(),
+              novelId: batch.novelId,
+              chapterId: job.chapterId,
+              profileId: profile.id,
+              contextHash: pack.contentHash,
+              prompt: continuationPrompt(
+                styledContext,
+                candidate.content,
+                chapter.targetWords,
+              ),
+              maxOutputTokens: output,
+              temperature: 0.8,
+            });
+            const merged = mergeContinuation(
+              candidate.content,
+              continuation.content,
+            );
+            candidate = await get().editCandidateContent(candidate.id, merged);
+            candidate = {
+              ...candidate,
+              inputTokens: candidate.inputTokens + continuation.inputTokens,
+              outputTokens: candidate.outputTokens + continuation.outputTokens,
+            };
+            await emit({
+              batchId,
+              novelId: batch.novelId,
+              chapterId: chapter.id,
+              stage: "candidate_saved",
+              level: "success",
+              message: `补写完成，本章共 ${candidate.wordCount} 字`,
+              data: {
+                wordCount: candidate.wordCount,
+                outputTokens: continuation.outputTokens,
+              },
+            });
+          } catch (continueError) {
+            if ((continueError as Error)?.name === "AbortError") throw continueError;
+            await emit({
+              batchId,
+              novelId: batch.novelId,
+              chapterId: job.chapterId,
+              stage: "generating",
+              level: "warning",
+              message: `补写失败，保留已生成的 ${candidate.wordCount} 字：${continueError instanceof Error ? continueError.message : "未知错误"}`,
+              data: {},
+            });
+          }
+        }
         await platform.updateGenerationJob(job.id, "candidate_ready", {
           candidateId: candidate.id,
           inputTokens: candidate.inputTokens,
@@ -1190,6 +1695,22 @@ export const useNovelStore = create<NovelState>((set, get) => ({
         });
         await get().loadBatches();
         jobs = await get().loadJobs(batchId);
+        // 单章审批制：一章就绪即暂停，等作者改稿、审正史建议再继续。
+        if (gate && nextRunnableJob(jobs)) {
+          await get().setBatchStatus(batchId, "paused", {
+            awaitingReview: true,
+          });
+          await emit({
+            batchId,
+            novelId: batch.novelId,
+            chapterId: job.chapterId,
+            stage: "awaiting_review",
+            level: "info",
+            message: "本章已可浏览/编辑。接受候选稿并处理正史建议后，点击“继续生成下一章”",
+            data: { position: job.position, candidateId: candidate.id },
+          });
+          return;
+        }
       } catch (error) {
         const attempt = job.attempt + 1,
           retryable =
@@ -1197,10 +1718,27 @@ export const useNovelStore = create<NovelState>((set, get) => ({
           status =
             retryable && attempt <= batch.policy.maxRetries
               ? "waiting_retry"
-              : "failed";
+              : "failed",
+          message = error instanceof Error ? error.message : "生成失败";
         await platform.updateGenerationJob(job.id, status, {
           attempt,
-          error: error instanceof Error ? error.message : "生成失败",
+          error: message,
+        });
+        await emit({
+          batchId,
+          novelId: batch.novelId,
+          chapterId: job.chapterId,
+          stage: status === "waiting_retry" ? "retry" : "failed",
+          level: status === "waiting_retry" ? "warning" : "error",
+          message:
+            status === "waiting_retry"
+              ? `第 ${attempt} 次尝试失败，稍后自动重试：${message}`
+              : `生成失败（已重试 ${attempt - 1} 次）：${message}`,
+          data: {
+            attempt,
+            error: message,
+            code: error instanceof ModelRequestError ? error.status : null,
+          },
         });
         if (status === "waiting_retry") {
           const retryAfter =
@@ -1219,6 +1757,15 @@ export const useNovelStore = create<NovelState>((set, get) => ({
       batchId,
       jobs.some((item) => item.status === "failed") ? "failed" : "completed",
     );
+    await emit({
+      batchId,
+      novelId: batch.novelId,
+      chapterId: null,
+      stage: "batch_completed",
+      level: "success",
+      message: "本批任务全部完成",
+      data: { chapters: jobs.length },
+    });
   },
   async loadBible(novelId) {
     const sections = await platform.listBibleSections(novelId);

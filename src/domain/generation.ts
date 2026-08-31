@@ -6,6 +6,26 @@ export type BatchStatus =
   | "completed"
   | "failed"
   | "cancelled";
+export interface GenerationBatch {
+  id: string;
+  novelId: string;
+  status: BatchStatus;
+  policy: GenerationPolicy;
+  outputTokensUsed: number;
+  /** 审批制下暂停等待作者审核上一章候选稿时为 true。 */
+  awaitingReview: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+export const BATCH_STATUS_LABELS: Record<BatchStatus, string> = {
+  draft: "草稿",
+  queued: "排队中",
+  running: "生成中",
+  paused: "已暂停",
+  completed: "已完成",
+  failed: "失败",
+  cancelled: "已取消",
+};
 export type GenerationJobStatus =
   | "queued"
   | "building_context"
@@ -15,15 +35,6 @@ export type GenerationJobStatus =
   | "waiting_retry"
   | "failed"
   | "paused";
-export interface GenerationBatch {
-  id: string;
-  novelId: string;
-  status: BatchStatus;
-  policy: GenerationPolicy;
-  outputTokensUsed: number;
-  createdAt: string;
-  updatedAt: string;
-}
 export interface GenerationJob {
   id: string;
   batchId: string;
@@ -37,6 +48,16 @@ export interface GenerationJob {
   error: string;
   updatedAt: string;
 }
+export const JOB_STATUS_LABELS: Record<GenerationJobStatus, string> = {
+  queued: "排队中",
+  building_context: "构建上下文",
+  generating: "正在写作",
+  candidate_ready: "待审阅",
+  completed: "已入正史",
+  waiting_retry: "等待重试",
+  failed: "失败",
+  paused: "已暂停",
+};
 export const JOB_TRANSITIONS: Record<
   GenerationJobStatus,
   GenerationJobStatus[]
@@ -90,6 +111,13 @@ export interface GenerationPolicy {
   concurrency?: number;
   /** 正文生成是否启用 GLM 深度思考（默认关闭：更快，且 max_tokens 全部留给正文）。 */
   deepThinking?: boolean;
+  /** 可选文风模板；空值表示由模型按作品设定自由发挥。 */
+  styleTemplateId?: string;
+  /**
+   * 审批制（默认开启）：每章候选稿生成后批次暂停，等待作者接受候选稿
+   * 并处理正史建议，才继续生成下一章。设为 false 恢复旧的连续生成。
+   */
+  approvalGate?: boolean;
 }
 
 export interface GenerationEstimate {
@@ -147,4 +175,114 @@ export function waitForRetry(ms: number, signal?: AbortSignal): Promise<boolean>
     };
     signal?.addEventListener("abort", stop, { once: true });
   });
+}
+
+/** 审批制默认开启：旧批次策略里没有该字段时同样按单章审批执行。 */
+export function approvalGateEnabled(policy: GenerationPolicy): boolean {
+  return policy.approvalGate !== false;
+}
+
+export function pendingFactProposalCount(
+  proposals: Array<{ status: string }>,
+): number {
+  return proposals.filter((item) => item.status === "proposed").length;
+}
+
+export function candidateReviewComplete(
+  candidateStatus: string,
+  proposals: Array<{ status: string }>,
+): boolean {
+  return (
+    candidateStatus === "accepted" && pendingFactProposalCount(proposals) === 0
+  );
+}
+
+/**
+ * 生成过程事件：给作者看的中文阶段摘要，同时保留 harness 需要的
+ * 结构化字段（模型、尝试次数、token、耗时、检查结果）。不含 API Key、
+ * 完整提示词或整章原文。
+ */
+export type GenerationEventLevel = "info" | "success" | "warning" | "error";
+export type GenerationEventStage =
+  | "batch_started"
+  | "context_build"
+  | "state_loaded"
+  | "generating"
+  | "candidate_saved"
+  | "quality_check"
+  | "fact_extraction"
+  | "chapter_review"
+  | "awaiting_review"
+  | "chapter_accepted"
+  | "retry"
+  | "failed"
+  | "batch_paused"
+  | "batch_completed"
+  | "plan_started"
+  | "plan_received"
+  | "plan_applied";
+export interface GenerationEvent {
+  id: string;
+  batchId: string;
+  novelId: string;
+  chapterId: string | null;
+  stage: GenerationEventStage;
+  level: GenerationEventLevel;
+  message: string;
+  data: Record<string, unknown>;
+  createdAt: string;
+}
+export type NewGenerationEvent = Omit<GenerationEvent, "id" | "createdAt">;
+
+export function generationEventToJsonl(events: GenerationEvent[]): string {
+  return events
+    .map((event) =>
+      JSON.stringify({
+        ts: event.createdAt,
+        runId: event.batchId,
+        novelId: event.novelId,
+        chapterId: event.chapterId,
+        stage: event.stage,
+        level: event.level,
+        message: event.message,
+        ...event.data,
+      }),
+    )
+    .join("\n");
+}
+
+/**
+ * “可能受影响”级联：前文章节在候选稿生成之后被修改过，且修改不是
+ * “接受候选稿原样回写”（那种情况内容与候选一致，不影响后文），
+ * 则后续章节的候选稿基于旧前文，应重新生成。
+ */
+export function staleEarlierChapterTitle(
+  candidate: { chapterId: string; createdAt: string },
+  chapters: Array<{
+    id: string;
+    position: number;
+    title: string;
+    content: string;
+    updatedAt: string;
+  }>,
+  candidatesOfNovel: Array<{
+    chapterId: string;
+    createdAt: string;
+    content: string;
+  }>,
+): string | null {
+  const own = chapters.find((item) => item.id === candidate.chapterId);
+  if (!own) return null;
+  for (const chapter of chapters) {
+    if (chapter.position >= own.position) continue;
+    if (!chapter.content.trim()) continue;
+    if (chapter.updatedAt <= candidate.createdAt) continue;
+    const referenced = candidatesOfNovel
+      .filter((item) => item.chapterId === chapter.id)
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
+    if (referenced && referenced.content.trim() === chapter.content.trim())
+      continue;
+    return chapter.title;
+  }
+  return null;
 }

@@ -4,6 +4,7 @@ import {
   planningPromptHash,
   type PlanningRun,
   type PlanningRunResponse,
+  type PlanningRunRepairResponse,
   type StartPlanningRunInput,
 } from "@domain/planning-run";
 import type { DbRow } from "./shared";
@@ -20,6 +21,7 @@ function fromRow(row: DbRow): PlanningRun {
     model: String(row.model),
     promptHash: String(row.prompt_hash),
     rawResponse: String(row.raw_response),
+    repairResponse: String(row.repair_response ?? ""),
     inputTokens: Number(row.input_tokens),
     outputTokens: Number(row.output_tokens),
     cachedTokens: Number(row.cached_tokens),
@@ -43,7 +45,7 @@ export function createPlanningRunsRepository(client: Client) {
     const id = nanoid(),
       now = new Date().toISOString();
     await client.execute({
-      sql: "INSERT INTO planning_runs VALUES (?,?,?,?,?,?,?,?,?,'',0,0,0,'running','',?,?)",
+      sql: "INSERT INTO planning_runs (id,novel_id,phase,start_chapter,end_chapter,profile_id,provider,model,prompt_hash,raw_response,input_tokens,output_tokens,cached_tokens,status,error,created_at,updated_at,repair_response) VALUES (?,?,?,?,?,?,?,?,?,'',0,0,0,'running','',?,?,'')",
       args: [
         id,
         input.novelId,
@@ -87,6 +89,24 @@ export function createPlanningRunsRepository(client: Client) {
     return (await get(id))!;
   }
 
+  async function repaired(
+    id: string,
+    response: PlanningRunRepairResponse,
+  ): Promise<PlanningRun> {
+    await client.execute({
+      sql: "UPDATE planning_runs SET repair_response=?,input_tokens=input_tokens+?,output_tokens=output_tokens+?,cached_tokens=cached_tokens+?,updated_at=? WHERE id=?",
+      args: [
+        response.repairResponse,
+        response.inputTokens,
+        response.outputTokens,
+        response.cachedTokens,
+        new Date().toISOString(),
+        id,
+      ],
+    });
+    return (await get(id))!;
+  }
+
   async function fail(id: string, error: string): Promise<PlanningRun> {
     await client.execute({
       sql: "UPDATE planning_runs SET status='failed',error=?,updated_at=? WHERE id=?",
@@ -103,5 +123,5 @@ export function createPlanningRunsRepository(client: Client) {
     return result.rows.map((row) => fromRow(row as DbRow));
   }
 
-  return { get, start, received, complete, fail, list };
+  return { get, start, received, repaired, complete, fail, list };
 }

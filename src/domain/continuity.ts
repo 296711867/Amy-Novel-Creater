@@ -35,6 +35,12 @@ export interface CharacterState {
   chapterId: string | null;
   summary: string;
   location: string;
+  /** 外貌演进：发型、伤痕、残疾等按章记录，写作时读取最新状态。 */
+  appearance: string;
+  /** 衣着变化：当前穿着，换装按章覆盖记录。 */
+  outfit: string;
+  /** 身份演进：新增头衔、职位、假身份等。 */
+  identity: string;
   physical: string;
   emotional: string;
   knowledge: string[];

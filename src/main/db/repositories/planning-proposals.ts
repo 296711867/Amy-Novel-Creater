@@ -5,6 +5,7 @@ import type {
   PlanningProposal,
   PlanningProposalStatus,
 } from "@domain/planning-proposal";
+import { planningProposalIdentity } from "@domain/planning-proposal";
 import { parseJson, type DbRow } from "./shared";
 
 function fromRow(row: DbRow): PlanningProposal {
@@ -16,6 +17,7 @@ function fromRow(row: DbRow): PlanningProposal {
     endChapter: Number(row.end_chapter),
     action: row.action as PlanningProposal["action"],
     targetType: row.target_type as PlanningProposal["targetType"],
+    targetRef: row.target_ref ? String(row.target_ref) : undefined,
     targetName: String(row.target_name),
     patch: parseJson(row.patch_json, {}),
     reason: String(row.reason),
@@ -41,18 +43,28 @@ export function createPlanningProposalsRepository(client: Client) {
     endChapter: number,
     proposals: NewPlanningProposal[],
   ): Promise<PlanningProposal[]> {
-    const now = new Date().toISOString();
+    const before = await list(novelId),
+      now = new Date().toISOString();
     await client.execute({
       sql: "DELETE FROM planning_proposals WHERE novel_id=? AND start_chapter=? AND end_chapter=? AND status='pending'",
       args: [novelId, startChapter, endChapter],
     });
-    if (proposals.length)
+    const retained = before.filter(
+        (item) =>
+          !(
+            item.startChapter === startChapter &&
+            item.endChapter === endChapter &&
+            item.status === "pending"
+          ),
+      ),
+      unique = uniqueNewProposals(retained, proposals);
+    if (unique.length)
       await client.batch(
-        proposals.map((item) => ({
-          sql: "INSERT INTO planning_proposals (id,novel_id,cycle_id,start_chapter,end_chapter,action,target_type,target_name,patch_json,reason,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        unique.map((item) => ({
+          sql: "INSERT INTO planning_proposals (id,novel_id,cycle_id,start_chapter,end_chapter,action,target_type,target_ref,target_name,patch_json,reason,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
           args: [
             nanoid(), novelId, cycleId, startChapter, endChapter, item.action,
-            item.targetType, item.targetName, JSON.stringify(item.patch),
+            item.targetType, item.targetRef ?? null, item.targetName, JSON.stringify(item.patch),
             item.reason, "pending", now, now,
           ],
         })),
@@ -61,6 +73,34 @@ export function createPlanningProposalsRepository(client: Client) {
     return (await list(novelId)).filter(
       (item) =>
         item.startChapter === startChapter && item.endChapter === endChapter,
+    );
+  }
+
+  async function addUnique(
+    novelId: string,
+    cycleId: string,
+    startChapter: number,
+    endChapter: number,
+    proposals: NewPlanningProposal[],
+  ): Promise<PlanningProposal[]> {
+    const unique = uniqueNewProposals(await list(novelId), proposals),
+      now = new Date().toISOString();
+    if (unique.length)
+      await client.batch(
+        unique.map((item) => ({
+          sql: "INSERT INTO planning_proposals (id,novel_id,cycle_id,start_chapter,end_chapter,action,target_type,target_ref,target_name,patch_json,reason,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+          args: [
+            nanoid(), novelId, cycleId, startChapter, endChapter, item.action,
+            item.targetType, item.targetRef ?? null, item.targetName,
+            JSON.stringify(item.patch), item.reason, "pending", now, now,
+          ],
+        })),
+        "write",
+      );
+    return (await list(novelId)).filter(
+      (item) => planningProposalIdentity(item) && unique.some(
+        (proposal) => planningProposalIdentity(proposal) === planningProposalIdentity(item),
+      ),
     );
   }
 
@@ -80,5 +120,22 @@ export function createPlanningProposalsRepository(client: Client) {
     return fromRow(result.rows[0] as DbRow);
   }
 
-  return { list, replacePending, updateStatus };
+  return { list, replacePending, addUnique, updateStatus };
+}
+
+function uniqueNewProposals(
+  existing: PlanningProposal[],
+  proposals: NewPlanningProposal[],
+): NewPlanningProposal[] {
+  const seen = new Set(
+    existing
+      .filter((item) => item.status !== "rejected")
+      .map(planningProposalIdentity),
+  );
+  return proposals.filter((item) => {
+    const key = planningProposalIdentity(item);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }

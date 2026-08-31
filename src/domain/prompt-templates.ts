@@ -8,7 +8,8 @@ export type PromptTemplateKey =
   | "cast_planning"
   | "scene_planning"
   | "scope_advisory"
-  | "brief_drafting";
+  | "brief_drafting"
+  | "persona_recommendation";
 export interface PromptTemplate {
   key: PromptTemplateKey;
   name: string;
@@ -31,7 +32,7 @@ export const PROMPT_TEMPLATES: Record<PromptTemplateKey, PromptTemplate> = {
     name: "事实提取",
     description: "候选稿生成后提取正史事实提案的指令，输出严格 JSON。",
     template:
-      '你是小说正史记录员。仅提取正文明确发生或明确改变的事实，不推测。返回严格 JSON：{"proposals":[{"kind":"timeline|character_state|foreshadow","title":"简短标题","payload":{}}]}。character_state 的 payload 可含 characterName、summary、location、physical、emotional、knowledge、goals、inventory、skills；timeline 可含 storyTime、detail、participants；foreshadow 可含 detail、status。正文：\n{{content}}',
+      '你是小说正史记录员。仅提取正文明确发生或明确改变的事实，不推测。特别要记录人物的外貌变化（发型、伤痕、残疾）、衣着变化、新增身份或头衔——后续章节必须延续这些状态。返回严格 JSON：{"proposals":[{"kind":"timeline|character_state|foreshadow","title":"简短标题","payload":{}}]}。格式硬性要求：数组字段必须是字符串数组，不要写成一句话；foreshadow 的 status 只能取 planned|planted|developing|resolved|abandoned，不要写 open 等其他值。character_state 的 payload：characterName、summary、location、appearance（外貌变化）、outfit（衣着）、identity（新增身份）、physical、emotional、knowledge[]、goals[]、inventory[]、skills[]；timeline：storyTime、detail、participants[]；foreshadow：detail、status。正文：\n{{content}}',
   },
   chapter_review: {
     key: "chapter_review",
@@ -60,21 +61,28 @@ export const PROMPT_TEMPLATES: Record<PromptTemplateKey, PromptTemplate> = {
     name: "滚动批次策划",
     description: "生成全书宏观路线和当前章节范围的详细策划包。",
     template:
-      '你是长篇网文总策划。不要一次生成全书所有章节，只规划第 {{startChapter}}–{{endChapter}} 章，并给出可调整的全书宏观阶段。\n书名：{{title}}（{{genre}}）\n核心设定：{{premise}}\n全书目标：约 {{targetChapters}} 章，单章 {{chapterWords}} 字。\n故事圣经：\n{{bible}}\n\n既有人物、地点、势力、物品和术语目录（引用既有名称，禁止擅自改名）：\n{{entities}}\n\n当前范围已有内容：\n{{existingPlans}}\n\n要求：roadmap 只给阶段/分卷范围、目标、转折和收束；cycle 写清本批次开场状态、目标、高潮和预期结束状态；chapters 必须恰好覆盖第 {{startChapter}}–{{endChapter}} 章，每章写独立标题、两到四句章纲、视角人物、涉及人物、场景、道具、技能、冲突结果、伏笔动作和章末钩子。发现前置设定不足时写入 proposals，不得直接覆盖既有设定。\n返回严格 JSON：{"volumes":[{"title":"卷名","outline":"阶段范围、目标、关键转折与收束"}],"cycle":{"goal":"","openingState":"","climax":"","expectedClosingState":""},"chapters":[{"position":1,"volumeTitle":"所属卷名","title":"第1章 标题","outline":"事件、人物、场景、冲突、结果、伏笔与钩子","viewpoint":"","characters":[],"scenes":[],"items":[],"skills":[]}],"proposals":[{"action":"add|update","targetType":"character|location|organization|item|term","targetName":"","patch":{},"reason":""}]}。除这个 JSON 外不要输出其他文字。',
+      '你是长篇网文总策划。不要一次生成全书所有章节，只规划第 {{startChapter}}–{{endChapter}} 章，并给出可调整的全书宏观阶段。\n书名：{{title}}（{{genre}}）\n核心设定：{{premise}}\n全书目标：约 {{targetChapters}} 章，单章 {{chapterWords}} 字。\n故事圣经：\n{{bible}}\n\n既有人物、地点、势力、物品和术语目录（每行开头 E-XXXXXXXX 是稳定引用；引用既有实体时必须原样使用，禁止擅自改名）：\n{{entities}}\n\n截至当前范围之前的已确认动态正史：\n{{canonMemory}}\n\n当前范围已有内容：\n{{existingPlans}}\n\n要求：roadmap 只给阶段/分卷范围、目标、转折和收束；cycle 写清本批次开场状态、目标、高潮和预期结束状态；chapters 必须恰好覆盖第 {{startChapter}}–{{endChapter}} 章，每章写独立标题、两到四句章纲、视角人物、涉及人物、场景、道具、技能、冲突结果、伏笔动作和章末钩子。characters/scenes/items 中引用既有实体时写稳定引用；实际结束状态和动态正史优先于旧的预期及静态实体卡。不得让已退场人物无解释复活，不得忽略开放伏笔。发现前置设定不足时写入 proposals，不得直接覆盖既有设定；更新既有实体必须填写 targetRef；疑似同一实体但称呼不同则提交 merge 提案，不得新建双卡。\n返回严格 JSON：{"volumes":[{"title":"卷名","outline":"阶段范围、目标、关键转折与收束"}],"cycle":{"goal":"","openingState":"","climax":"","expectedClosingState":""},"chapters":[{"position":1,"volumeTitle":"所属卷名","title":"第1章 标题","outline":"事件、人物、场景、冲突、结果、伏笔与钩子","viewpoint":"","characters":["E-XXXXXXXX"],"scenes":["E-XXXXXXXX"],"items":["E-XXXXXXXX"],"skills":[]}],"proposals":[{"action":"add|update|merge","targetType":"character|location|organization|item|term","targetRef":"更新或合并时填 E-XXXXXXXX","targetName":"","patch":{},"reason":""}]}。除这个 JSON 外不要输出其他文字。',
   },
   cast_planning: {
     key: "cast_planning",
     name: "人物分层规划",
     description: "把人物划分为主角/核心配角/酱油/龙套四级并补充名称库。",
     template:
-      '你是长篇网文角色策划。基于故事圣经为本书设计完整人物体系。\n书名：{{title}}（{{genre}}）\n故事圣经：\n{{bible}}\n既有角色（保持名字不变，可补充设定）：\n{{characters}}\n名称库（新角色起名须参照此风格，禁止重名）：\n{{namePool}}\n分层规则：protagonist 主角 1 名（完整卡含语言习惯与成长弧线）；support 核心配角 3-6 名（对手/伙伴/导师）；recurring 酱油人物 6-15 名（一行定位+出现条件+与主角关系，会在多章反复出现）；extra 跑龙套仅给名字（不出卡片）。\n返回严格 JSON：{"characters":[{"name":"姓名","summary":"一句话定位","aliases":[],"tier":"protagonist|support|recurring","profile":{"身份":"","性格":"","目标":"","秘密":"","语言习惯":"","成长弧线":"","出现条件":""}}],"extras":["龙套姓名","…"]}。recurring 的 profile 只需 出现条件 一项必填。',
+      '你是长篇网文角色策划。基于故事圣经为本书设计完整人物体系。\n书名：{{title}}（{{genre}}）\n故事圣经：\n{{bible}}\n既有角色（E-XXXXXXXX 是稳定引用；保持名字不变并原样回填 entityRef）：\n{{characters}}\n名称库（新角色起名须参照此风格，禁止重名）：\n{{namePool}}\n分层规则：protagonist 主角 1 名；support 核心配角 3-6 名（对手/伙伴/导师）；recurring 酱油人物 6-15 名（会在多章反复出现）；extra 跑龙套仅给名字（不出卡片）。\n人物卡“两者都有”：profile 是给 AI 用的结构化设定，另写一段给作者读的详细小传。既有角色必须填写 entityRef；新角色省略 entityRef。疑似同一人物但称呼不同，不得自行合并或新建双卡。\n返回严格 JSON：{"characters":[{"entityRef":"既有角色填 E-XXXXXXXX，新角色省略","name":"姓名","summary":"一句话定位","aliases":[],"tier":"protagonist|support|recurring","profile":{},"detailedBio":"150-300字详细人物小传（作者阅读用：经历、关系、当前处境、说话味道）"}],"extras":["龙套姓名","…"]}。\nprotagonist 与 support 的 profile 必须完整：身份、人格（MBTI 或原型标签）、价值观、欲望、恐惧、性格缺陷、秘密、语言习惯、压力反应、成长弧线、外貌、衣着、目标。recurring 的 profile 只需 出现条件 与 性格标签（一句话）两项。',
+  },
+  persona_recommendation: {
+    key: "persona_recommendation",
+    name: "人格阵容推荐",
+    description: "为整个人物阵容推荐人格与写作行为约束，作者批量确认后生效。",
+    template:
+      "你是长篇网文人格策划。为以下整本书的人物阵容一次性推荐人格设定，供作者逐个调整后批量确认。\n书名：{{title}}（{{genre}}）\n核心设定：{{premise}}\n故事圣经：\n{{bible}}\n\n人物阵容：\n{{characters}}\n\n推荐规则：\n1. 只为主角和核心配角推荐完整人格模型：personaType 用 MBTI（如 INTJ）或角色原型（如“智者”“影子”）+ 一句话定位；价值观、恐惧、缺陷要能直接约束写作用词与决策。\n2. 常驻次要人物（酱油）只给简化性格标签：一句可以复用的性格短语，不使用 MBTI。\n3. 跑龙套不推荐（不要出现在结果里）。\n4. 每个人给出写作行为约束 writingConstraints：对话风格、决策倾向、压力下的反应，让正文生成时人物言行不串线。\n5. 全阵容人格要互补且服务主线矛盾，避免两个同质人格。\n\n返回严格 JSON：{\"recommendations\":[{\"name\":\"人物名（必须与阵容一致）\",\"personaType\":\"人格标签\",\"reason\":\"推荐理由（一两句）\",\"writingConstraints\":\"写作行为约束\",\"speechHabit\":\"语言习惯\"}]}。除这个 JSON 外不要输出其他文字。",
   },
   scene_planning: {
     key: "scene_planning",
     name: "场景库规划",
     description: "生成可复用的功能场景卡（含视觉锚点，保证重复场景一致）。",
     template:
-      '你是长篇网文场景与实体设计师。基于故事圣经设计本书的场景库、势力、关键物品和术语。\n书名：{{title}}（{{genre}}）\n故事圣经：\n{{bible}}\n既有地点（沿用名字，补充场景卡字段）：\n{{locations}}\n要求：场景覆盖主基地、规则空间、常去现实场景和前中期副本；每个场景给 3-5 个固定视觉锚点。势力和关键物品必须服务主线冲突，禁止只起名字不说明用途。\n返回严格 JSON：{"scenes":[{"name":"场景名","aliases":[],"summary":"一句话说明","purpose":"叙事功能","mood":"感官氛围","visualAnchors":["锚点1","锚点2"],"residents":"常驻人物","dangerLevel":"低|中|高"}],"entities":[{"type":"organization|item|term","name":"名称","summary":"用途和与主线关系","aliases":[],"profile":{}}]}。共 8-20 个场景，并至少包含 1 个 organization 和 1 个 item。',
+      '你是长篇网文场景与实体设计师。基于故事圣经设计本书的场景库、势力、关键物品和术语。\n书名：{{title}}（{{genre}}）\n故事圣经：\n{{bible}}\n既有地点（E-XXXXXXXX 是稳定引用；沿用名字并原样回填 entityRef）：\n{{locations}}\n要求：场景覆盖主基地、规则空间、常去现实场景和前中期副本；每个场景给 3-5 个固定视觉锚点。势力和关键物品必须服务主线冲突，禁止只起名字不说明用途。既有实体必须填写 entityRef；新实体省略。疑似同一实体但称呼不同，不得自行合并或新建双卡。\n返回严格 JSON：{"scenes":[{"entityRef":"既有地点填 E-XXXXXXXX","name":"场景名","aliases":[],"summary":"一句话说明","purpose":"叙事功能","mood":"感官氛围","visualAnchors":["锚点1","锚点2"],"residents":"常驻人物","dangerLevel":"低|中|高"}],"entities":[{"entityRef":"既有实体填写，新实体省略","type":"organization|item|term","name":"名称","summary":"用途和与主线关系","aliases":[],"profile":{}}]}。共 8-20 个场景，并至少包含 1 个 organization 和 1 个 item。',
   },
   scope_advisory: {
     key: "scope_advisory",

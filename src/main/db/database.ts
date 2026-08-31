@@ -15,8 +15,14 @@ import { createPlanningWorkflowRepository } from "./repositories/planning-workfl
 import { assertPlanningReady } from "@domain/planning-workflow";
 import { createPlanningRunsRepository } from "./repositories/planning-runs";
 import { createPlanningCyclesRepository } from "./repositories/planning-cycles";
-import type { GenerationPolicy } from "@domain/generation";
+import type { SavePlanningCycleInput } from "@domain/planning-cycle";
+import {
+  pendingFactProposalCount,
+  type GenerationPolicy,
+} from "@domain/generation";
 import { createPlanningProposalsRepository } from "./repositories/planning-proposals";
+import { createStyleTemplatesRepository } from "./repositories/style-templates";
+import { createWorkflowRunsRepository } from "./repositories/workflow-runs";
 
 /**
  * Thin facade over the domain repositories. Public API signatures must stay
@@ -36,6 +42,8 @@ export class NovelDatabase {
   private readonly planningRuns;
   private readonly planningCycles;
   private readonly planningProposals;
+  private readonly styleTemplates;
+  private readonly workflowRuns;
 
   private constructor(private readonly client: Client) {
     this.novels = createNovelsRepository(client);
@@ -51,6 +59,8 @@ export class NovelDatabase {
     this.planningRuns = createPlanningRunsRepository(client);
     this.planningCycles = createPlanningCyclesRepository(client);
     this.planningProposals = createPlanningProposalsRepository(client);
+    this.styleTemplates = createStyleTemplatesRepository(client);
+    this.workflowRuns = createWorkflowRunsRepository(client);
   }
 
   static async open(path: string): Promise<NovelDatabase> {
@@ -86,6 +96,12 @@ export class NovelDatabase {
   ) {
     return this.planningRuns.received(id, response);
   }
+  recordPlanningRepair(
+    id: string,
+    response: Parameters<typeof this.planningRuns.repaired>[1],
+  ) {
+    return this.planningRuns.repaired(id, response);
+  }
   completePlanningRun(id: string) {
     return this.planningRuns.complete(id);
   }
@@ -98,7 +114,38 @@ export class NovelDatabase {
   listPlanningCycles(novelId: string) {
     return this.planningCycles.list(novelId);
   }
-  savePlanningCycle(input: Parameters<typeof this.planningCycles.save>[0]) {
+  createWorkflowRun(input: Parameters<typeof this.workflowRuns.create>[0]) {
+    return this.workflowRuns.create(input);
+  }
+  updateWorkflowRun(input: Parameters<typeof this.workflowRuns.update>[0]) {
+    return this.workflowRuns.update(input);
+  }
+  listWorkflowRuns(novelId: string) {
+    return this.workflowRuns.list(novelId);
+  }
+  async savePlanningCycle(input: SavePlanningCycleInput) {
+    if (input.status === "completed") {
+      const chapters = (await this.listChapters(input.novelId)).filter(
+          (item) =>
+            item.position >= input.startChapter &&
+            item.position <= input.endChapter,
+        ),
+        candidates = (
+          await Promise.all(
+            chapters.map((item) => this.listChapterCandidates(item.id)),
+          )
+        )
+          .flat()
+          .filter((item) => item.status === "accepted"),
+        proposals = (
+          await Promise.all(
+            candidates.map((item) => this.listFactProposals(item.id)),
+          )
+        ).flat(),
+        pending = pendingFactProposalCount(proposals);
+      if (pending)
+        throw new Error(`本批仍有 ${pending} 条正史建议未处理，不能封存周期`);
+    }
     return this.planningCycles.save(input);
   }
   listPlanningProposals(novelId: string) {
@@ -108,6 +155,11 @@ export class NovelDatabase {
     ...args: Parameters<typeof this.planningProposals.replacePending>
   ) {
     return this.planningProposals.replacePending(...args);
+  }
+  addPlanningProposals(
+    ...args: Parameters<typeof this.planningProposals.addUnique>
+  ) {
+    return this.planningProposals.addUnique(...args);
   }
   updatePlanningProposalStatus(
     ...args: Parameters<typeof this.planningProposals.updateStatus>
@@ -222,6 +274,19 @@ export class NovelDatabase {
     return this.profiles.deleteModelProfile(id);
   }
 
+  listStyleTemplates() {
+    return this.styleTemplates.list();
+  }
+  getStyleTemplate(id: string) {
+    return this.styleTemplates.get(id);
+  }
+  saveStyleTemplate(input: Parameters<typeof this.styleTemplates.save>[0]) {
+    return this.styleTemplates.save(input);
+  }
+  deleteStyleTemplate(id: string) {
+    return this.styleTemplates.remove(id);
+  }
+
   createChapterCandidate(
     input: Parameters<typeof this.generation.createChapterCandidate>[0],
   ) {
@@ -232,6 +297,9 @@ export class NovelDatabase {
   }
   listChapterCandidates(chapterId: string) {
     return this.generation.listChapterCandidates(chapterId);
+  }
+  updateChapterCandidateContent(id: string, content: string) {
+    return this.generation.updateChapterCandidateContent(id, content);
   }
   setCandidateStatus(id: string, status: "accepted" | "rejected") {
     return this.generation.setCandidateStatus(id, status);
@@ -254,13 +322,13 @@ export class NovelDatabase {
     ]);
     const cycle = cycles.find(
       (item) =>
-        item.startChapter === policy.startChapter &&
-        item.endChapter === policy.endChapter &&
+        policy.startChapter >= item.startChapter &&
+        policy.endChapter <= item.endChapter &&
         ["ready", "generating"].includes(item.status),
     );
     if (!cycle)
       throw new Error(
-        `第 ${policy.startChapter}–${policy.endChapter} 章策划包尚未通过一致性检查`,
+        `第 ${policy.startChapter}–${policy.endChapter} 章不在已通过一致性检查的策划包范围内`,
       );
     assertPlanningReady({
       novel,
@@ -324,8 +392,23 @@ export class NovelDatabase {
   setBatchStatus(
     id: string,
     status: Parameters<typeof this.generation.setBatchStatus>[1],
+    patch?: Parameters<typeof this.generation.setBatchStatus>[2],
   ) {
-    return this.generation.setBatchStatus(id, status);
+    return this.generation.setBatchStatus(id, status, patch);
+  }
+  completeJobByCandidate(candidateId: string) {
+    return this.generation.completeJobByCandidate(candidateId);
+  }
+  getJobByCandidate(candidateId: string) {
+    return this.generation.getJobByCandidate(candidateId);
+  }
+  saveGenerationEvent(
+    input: Parameters<typeof this.generation.saveGenerationEvent>[0],
+  ) {
+    return this.generation.saveGenerationEvent(input);
+  }
+  listGenerationEvents(batchId: string, limit?: number) {
+    return this.generation.listGenerationEvents(batchId, limit);
   }
   updateGenerationJob(
     id: string,

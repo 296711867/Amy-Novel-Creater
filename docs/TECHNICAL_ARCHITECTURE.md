@@ -35,7 +35,9 @@
 
 ### Web
 
-- 第一阶段的 Web 是本机浏览器模式，使用 IndexedDB/localStorage 适配器用于界面开发。
+- 当前 Web 是本机浏览器预览模式，`web-platform.ts` 使用 localStorage；它不适合长期保存
+  大量正文、候选稿和版本。正式长篇 Web 数据迁移到 IndexedDB 的任务见 `BACKLOG.md`
+  AN-006。
 - 正式部署时增加 `WebApiPlatformAdapter`，调用独立 Node 服务。
 - Web 服务实现同一组 Application Ports；React 页面不做条件分支。
 - 浏览器不能安全长期保存第三方 API Key，正式部署必须由服务端密钥库管理。
@@ -46,10 +48,9 @@
 src/
 ├─ domain/             纯实体、值对象、规则、状态机
 ├─ application/        用例、端口、DTO、生成编排
-├─ infrastructure/     数据库、文件、模型、Web/Electron 适配
-├─ main/               Electron composition root 与 IPC
+├─ main/               Electron composition root、SQLite、模型、密钥、后台任务与 IPC
 ├─ preload/            安全桥
-├─ renderer/src/       React 页面与组件
+├─ renderer/src/       React 页面、组件、Store 与当前 Web 平台适配
 └─ shared/             跨进程协议、事件和可序列化类型
 ```
 
@@ -64,8 +65,12 @@ src/
 - 第 9 步未确认时，数据库和 Web 适配器都拒绝创建正文生成批次。
 - 项目备份携带工作流状态；旧版备份没有该字段时按未审核状态恢复。
 
-`planning_workflows` 只记录人工规划检查点，不承担后台运行。未来 `workflow_runs` 仍用于
-Autopilot Runner 的阶段调度、暂停和断点恢复，两者职责不能混合。
+`planning_workflows` 只记录人工规划检查点，不承担后台运行。Autopilot Runner 使用独立的
+`workflow_runs` 表：`src/application/run-workflow.ts` 编排规划阶段与正文批次，运行状态
+（阶段、检查点、重试计数、挂接批次）持久化到该表，暂停、失败和完成后都可从断点恢复。
+批次状态到运行状态的收敛规则由 `src/domain/workflow-run.ts` 单点维护：Web 端批次在恢复
+调用内同步执行完毕，返回时即收敛；Electron 端批次在主进程后台执行，由批次广播事件
+驱动 store 收敛。两者职责不能混合，运行语义详见 `AUTOPILOT_WORKFLOW.md` 第 6.1 节。
 
 `GenerationBatch` 拆成多个 `ChapterGenerationJob`，同一作品固定串行执行：
 
@@ -113,9 +118,12 @@ Context Builder 接收章节、预算和检索策略，输出带来源的不可�
 只产生 Finding，不能自动改正史。
 
 候选链只服务于当前批次连续性，不属于正史。候选稿接受后才创建不可变版本；事实提案
-必须在对应候选稿已接受后才能由作者写入正史。
+必须在对应候选稿已接受后才能由作者写入正史。接受候选只完成正文入史，生成任务仍停在
+`candidate_ready`；该候选的全部事实提案均接受或拒绝后才转为 `completed` 并放行下一章。
+封存周期时，Electron 与 Web 数据层都会再次检查范围内已接受候选，不允许遗留
+`proposed` 提案。
 
-## 7. 测试策略
+## 7. 目标测试策略
 
 - Domain：状态机、Token 预算、章节范围和正史规则。
 - Application：使用内存仓库验证批次暂停、恢复、失败重试和幂等。
@@ -123,11 +131,26 @@ Context Builder 接收章节、预算和检索策略，输出带来源的不可�
 - Renderer：关键向导、接受/拒绝和保存状态。
 - 契约测试：Electron IPC 与 Web API 必须返回同一 DTO。
 
+Domain、Application、数据库与模型适配已有自动化覆盖；Renderer 关键流程和双端契约仍是
+待办，不得把本节目标误写成已完成，状态见 `BACKLOG.md` AN-010、AN-011。
+
 ## 8. 滚动规划与版本化记忆
 
 一次性全书结构调用将由范围化 `planning_cycle` 取代。步骤 7–10 循环执行当前默认十章，
 规划候选和前置设定提案确认后才更新章节槽位。规划调用必须先持久化原始响应和解析错误，
 因此供应商返回合法 JSON 后追加说明文字时可以重新解析，而不是丢失付费结果。
+
+第 2 个及后续规划周期会把上一已封存周期的预期/实际结束状态、截至当前范围前的最新
+人物状态、开放伏笔和时间线尾部装配为不超过 4,000 字符的动态正史摘要。Electron/Web
+共用 `rollingPlanningMemoryText`，并明确以实际结束状态和动态正史覆盖旧预期或静态实体卡。
+
+规划中的既有实体使用由实体 ID 派生的 `E-…` 短引用。明确短引用或名称/别名完全匹配时
+才更新既有卡；“称号·姓名”这类同核心称呼只生成作者审核的合并提案，不做模糊静默合并。
+新增设定提案按类型和规范化名称跨周期去重；项目恢复时短引用随实体新 ID 一起重映射。
+
+规划模型原始响应先持久化，再做纯解析校验。仅 JSON 语法或 Schema 结构错误会触发一次
+0.1 温度修复调用；范围完整性等业务错误直接失败。修复响应单独留痕并再次经过同一校验，
+不得递归重试或覆盖原始响应。
 
 永久设定、章节记忆、动态正史和临时 Context Pack 分层保存。AI 派生正史必须绑定候选稿
 和不可变正文版本；章节重写使旧派生记忆失效。详细状态机、锁规则和实施顺序见

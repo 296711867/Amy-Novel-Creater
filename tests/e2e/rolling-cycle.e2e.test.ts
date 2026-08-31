@@ -379,7 +379,7 @@ async function waitBatch(
     if (Date.now() - started > timeoutMs) throw new Error("批次执行超时");
     if (Date.now() - lastLog > 30_000) {
       const jobs = await db.listGenerationJobs(batchId);
-      const counts = jobs.reduce<Record<string, number>>((acc, item) => {
+      const counts = jobs.reduce((acc: Record<string, number>, item) => {
         acc[item.status] = (acc[item.status] ?? 0) + 1;
         return acc;
       }, {});

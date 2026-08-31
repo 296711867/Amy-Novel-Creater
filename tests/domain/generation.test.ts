@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
   batchProgress,
+  candidateReviewComplete,
   canMoveJob,
   estimateGeneration,
   nextRunnableJob,
+  pendingFactProposalCount,
   retryDelayMs,
   validateChapterRange,
   type GenerationJob,
@@ -71,5 +73,17 @@ describe("generation queue", () => {
     expect(retryDelayMs(4)).toBe(8000);
     expect(retryDelayMs(2, 45_000)).toBe(45_000);
     expect(retryDelayMs(2, 999_000)).toBe(120_000);
+  });
+  it("releases an accepted candidate only after every fact is reviewed", () => {
+    const proposals = [{ status: "proposed" }, { status: "accepted" }];
+    expect(pendingFactProposalCount(proposals)).toBe(1);
+    expect(candidateReviewComplete("accepted", proposals)).toBe(false);
+    expect(
+      candidateReviewComplete("accepted", [
+        { status: "accepted" },
+        { status: "rejected" },
+      ]),
+    ).toBe(true);
+    expect(candidateReviewComplete("candidate", [])).toBe(false);
   });
 });

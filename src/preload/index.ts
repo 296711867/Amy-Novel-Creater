@@ -11,12 +11,15 @@ import type { SaveUsageInput } from "@domain/usage";
 import type { SaveModelProfileInput } from "@domain/model-profile";
 import type { PlanPhase, PlanRange } from "@domain/planning";
 import type {
+  ContinueChapterInput,
+  ContinueChapterResult,
   GenerateChapterInput,
   GenerationProgress,
 } from "@domain/chapter-generation";
 import type { FactProposal, StoredFinding } from "@domain/quality-check";
 import type {
   GenerationBatch,
+  GenerationEvent,
   GenerationJob,
   GenerationJobStatus,
   GenerationPolicy,
@@ -36,6 +39,14 @@ import type { NovelProjectBundle } from "@domain/project-export";
 import type { PlanningWorkflow } from "@domain/planning-workflow";
 import type { SavePlanningCycleInput } from "@domain/planning-cycle";
 import type { PlanningProposalStatus } from "@domain/planning-proposal";
+import type {
+  AnalyzeStyleTemplateInput,
+  SaveStyleTemplateInput,
+} from "@domain/style-template";
+import type {
+  CreateWorkflowRunInput,
+  UpdateWorkflowRunInput,
+} from "@domain/workflow-run";
 
 const api: AmyNovelApi = {
   host: "electron",
@@ -52,6 +63,8 @@ const api: AmyNovelApi = {
     premise: string;
     notes?: string;
   }) => ipcRenderer.invoke(IPC_CHANNELS.suggestPlanningBrief, input),
+  suggestPersonaLineup: (novelId: string) =>
+    ipcRenderer.invoke(IPC_CHANNELS.suggestPersonaLineup, novelId),
   importNovelProject: (bundle: NovelProjectBundle) =>
     ipcRenderer.invoke(IPC_CHANNELS.importNovelProject, bundle),
   listNovels: () => ipcRenderer.invoke(IPC_CHANNELS.listNovels),
@@ -86,6 +99,12 @@ const api: AmyNovelApi = {
       proposalId,
       status,
     ),
+  createWorkflowRun: (input: CreateWorkflowRunInput) =>
+    ipcRenderer.invoke(IPC_CHANNELS.createWorkflowRun, input),
+  updateWorkflowRun: (input: UpdateWorkflowRunInput) =>
+    ipcRenderer.invoke(IPC_CHANNELS.updateWorkflowRun, input),
+  listWorkflowRuns: (novelId: string) =>
+    ipcRenderer.invoke(IPC_CHANNELS.listWorkflowRuns, novelId),
   listChapters: (novelId: string) =>
     ipcRenderer.invoke(IPC_CHANNELS.listChapters, novelId),
   getChapter: (chapterId: string) =>
@@ -128,6 +147,14 @@ const api: AmyNovelApi = {
     ipcRenderer.invoke(IPC_CHANNELS.deleteModelProfile, id),
   testModelConnection: (id: string, key?: string) =>
     ipcRenderer.invoke(IPC_CHANNELS.testModelConnection, id, key),
+  listStyleTemplates: () =>
+    ipcRenderer.invoke(IPC_CHANNELS.listStyleTemplates),
+  analyzeStyleTemplate: (input: AnalyzeStyleTemplateInput) =>
+    ipcRenderer.invoke(IPC_CHANNELS.analyzeStyleTemplate, input),
+  saveStyleTemplate: (input: SaveStyleTemplateInput) =>
+    ipcRenderer.invoke(IPC_CHANNELS.saveStyleTemplate, input),
+  deleteStyleTemplate: (id: string) =>
+    ipcRenderer.invoke(IPC_CHANNELS.deleteStyleTemplate, id),
   generateChapter: (
     input: GenerateChapterInput,
     onProgress: (event: GenerationProgress) => void,
@@ -147,6 +174,10 @@ const api: AmyNovelApi = {
   },
   cancelGeneration: (requestId: string) =>
     ipcRenderer.invoke(IPC_CHANNELS.cancelGeneration, requestId),
+  continueChapter: (input: ContinueChapterInput): Promise<ContinueChapterResult> =>
+    ipcRenderer.invoke(IPC_CHANNELS.continueChapter, input),
+  updateChapterCandidateContent: (id: string, content: string) =>
+    ipcRenderer.invoke(IPC_CHANNELS.updateChapterCandidateContent, id, content),
   listChapterCandidates: (chapterId: string) =>
     ipcRenderer.invoke(IPC_CHANNELS.listChapterCandidates, chapterId),
   acceptChapterCandidate: (id: string) =>
@@ -199,8 +230,25 @@ const api: AmyNovelApi = {
     ipcRenderer.invoke(IPC_CHANNELS.listGenerationBatches),
   listGenerationJobs: (id: string) =>
     ipcRenderer.invoke(IPC_CHANNELS.listGenerationJobs, id),
-  setBatchStatus: (id: string, status: GenerationBatch["status"]) =>
-    ipcRenderer.invoke(IPC_CHANNELS.setBatchStatus, id, status),
+  setBatchStatus: (
+    id: string,
+    status: GenerationBatch["status"],
+    patch?: { awaitingReview?: boolean },
+  ) => ipcRenderer.invoke(IPC_CHANNELS.setBatchStatus, id, status, patch),
+  listGenerationEvents: (id: string) =>
+    ipcRenderer.invoke(IPC_CHANNELS.listGenerationEvents, id),
+  onGenerationEvent: (listener: (event: GenerationEvent) => void) => {
+    const subscription = (
+      _event: Electron.IpcRendererEvent,
+      data: GenerationEvent,
+    ) => listener(data);
+    ipcRenderer.on(IPC_CHANNELS.generationEvent, subscription);
+    return () =>
+      ipcRenderer.removeListener(
+        IPC_CHANNELS.generationEvent,
+        subscription,
+      );
+  },
   updateGenerationJob: (
     id: string,
     status: GenerationJobStatus,

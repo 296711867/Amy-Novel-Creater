@@ -51,6 +51,9 @@ function characterStateFrom(row: DbRow): CharacterState {
     chapterId: row.chapter_id ? String(row.chapter_id) : null,
     summary: String(row.summary),
     location: String(row.location),
+    appearance: String(row.appearance ?? ""),
+    outfit: String(row.outfit ?? ""),
+    identity: String(row.identity ?? ""),
     physical: String(row.physical),
     emotional: String(row.emotional),
     knowledge: parseJson<string[]>(row.knowledge_json, []),
@@ -172,7 +175,7 @@ export function createContinuityRepository(client: Client) {
     const now = new Date().toISOString(),
       id = input.id ?? nanoid();
     await client.execute({
-      sql: `INSERT INTO character_states (id,novel_id,character_id,chapter_id,summary,location,physical,emotional,knowledge_json,goals_json,inventory_json,skills_json,source,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET chapter_id=excluded.chapter_id,summary=excluded.summary,location=excluded.location,physical=excluded.physical,emotional=excluded.emotional,knowledge_json=excluded.knowledge_json,goals_json=excluded.goals_json,inventory_json=excluded.inventory_json,skills_json=excluded.skills_json,source=excluded.source,updated_at=excluded.updated_at`,
+      sql: `INSERT INTO character_states (id,novel_id,character_id,chapter_id,summary,location,appearance,outfit,identity,physical,emotional,knowledge_json,goals_json,inventory_json,skills_json,source,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET chapter_id=excluded.chapter_id,summary=excluded.summary,location=excluded.location,appearance=excluded.appearance,outfit=excluded.outfit,identity=excluded.identity,physical=excluded.physical,emotional=excluded.emotional,knowledge_json=excluded.knowledge_json,goals_json=excluded.goals_json,inventory_json=excluded.inventory_json,skills_json=excluded.skills_json,source=excluded.source,updated_at=excluded.updated_at`,
       args: [
         id,
         input.novelId,
@@ -180,6 +183,9 @@ export function createContinuityRepository(client: Client) {
         input.chapterId,
         input.summary,
         input.location,
+        input.appearance ?? "",
+        input.outfit ?? "",
+        input.identity ?? "",
         input.physical,
         input.emotional,
         JSON.stringify(normalizeStateList(input.knowledge)),

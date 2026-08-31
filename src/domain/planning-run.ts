@@ -13,6 +13,7 @@ export interface PlanningRun {
   model: string;
   promptHash: string;
   rawResponse: string;
+  repairResponse: string;
   inputTokens: number;
   outputTokens: number;
   cachedTokens: number;
@@ -35,6 +36,13 @@ export interface StartPlanningRunInput {
 
 export interface PlanningRunResponse {
   rawResponse: string;
+  inputTokens: number;
+  outputTokens: number;
+  cachedTokens: number;
+}
+
+export interface PlanningRunRepairResponse {
+  repairResponse: string;
   inputTokens: number;
   outputTokens: number;
   cachedTokens: number;

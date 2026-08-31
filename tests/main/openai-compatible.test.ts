@@ -6,7 +6,6 @@ import {
 } from "../../src/main/model/openai-compatible";
 import {
   chatCompletionsRequestBody,
-  ModelRequestError,
 } from "../../src/domain/model-profile";
 
 const profile = {
@@ -96,7 +95,7 @@ describe("OpenAI-compatible adapter", () => {
             headers: { "retry-after": "3" },
           }),
       ),
-    ).rejects.toMatchObject<ModelRequestError>({
+    ).rejects.toMatchObject({
       status: 429,
       retryable: true,
       retryAfterMs: 3000,

@@ -1,4 +1,4 @@
-import { app, type IpcMain } from "electron";
+import { app, BrowserWindow, type IpcMain } from "electron";
 import type {
   CreateChapterInput,
   CreateNovelInput,
@@ -13,6 +13,7 @@ import type { SecretVault } from "../security/secret-vault";
 import { testOpenAICompatible } from "../model/openai-compatible";
 import { streamOpenAICompatible } from "../model/openai-compatible";
 import type {
+  ContinueChapterInput,
   GenerateChapterInput,
   GenerationProgress,
 } from "@domain/chapter-generation";
@@ -21,9 +22,14 @@ import { BatchRunner } from "../generation/batch-runner";
 import type { FactProposal, StoredFinding } from "@domain/quality-check";
 import type {
   GenerationBatch,
+  GenerationEvent,
   GenerationJob,
   GenerationJobStatus,
   GenerationPolicy,
+} from "@domain/generation";
+import {
+  candidateReviewComplete,
+  pendingFactProposalCount,
 } from "@domain/generation";
 import { IPC_CHANNELS } from "@shared/ipc-contract";
 import type { NovelDatabase } from "../db/database";
@@ -57,9 +63,29 @@ import {
   parseBriefDraft,
 } from "@domain/brief-drafting";
 import type { PlanningWorkflow } from "@domain/planning-workflow";
-import { applyNovelPlan } from "@application/apply-novel-plan";
+import {
+  applyNovelPlan,
+  validateNovelPlanContent,
+} from "@application/apply-novel-plan";
+import { repairPlanningContentOnce } from "@application/repair-planning-content";
 import { reviewPlanningProposal } from "@application/review-planning-proposal";
 import type { PlanningProposalStatus } from "@domain/planning-proposal";
+import type {
+  CreateWorkflowRunInput,
+  UpdateWorkflowRunInput,
+} from "@domain/workflow-run";
+import {
+  applyStyleTemplate,
+  parseStyleAnalysis,
+  styleAnalysisPrompt,
+  type AnalyzeStyleTemplateInput,
+  type SaveStyleTemplateInput,
+} from "@domain/style-template";
+import {
+  parsePersonaRecommendation,
+  personaRecommendationMaxOutputTokens,
+  personaRecommendationPrompt,
+} from "@domain/persona-recommendation";
 
 export function registerNovelIpc(
   ipc: IpcMain,
@@ -67,7 +93,25 @@ export function registerNovelIpc(
   secrets: SecretVault,
 ): void {
   const activeGenerations = new Map<string, AbortController>();
-  const batchRunner = new BatchRunner(database, secrets);
+  // 生成过程事件：先落库（harness 可回溯），再广播给所有渲染窗口。
+  const broadcastEvent = (event: GenerationEvent) => {
+    for (const window of BrowserWindow.getAllWindows())
+      window.webContents.send(IPC_CHANNELS.generationEvent, event);
+  };
+  const batchRunner = new BatchRunner(database, secrets, broadcastEvent);
+  const finalizeAcceptedCandidate = async (candidateId: string) => {
+    const candidate = await database.getChapterCandidate(candidateId),
+      proposals = await database.listFactProposals(candidateId),
+      pending = pendingFactProposalCount(proposals),
+      job = await findJobByCandidate(database, candidateId);
+    if (
+      candidate &&
+      candidateReviewComplete(candidate.status, proposals) &&
+      job?.status === "candidate_ready"
+    )
+      await database.completeJobByCandidate(candidateId);
+    return { candidate, pending, job };
+  };
   ipc.handle(IPC_CHANNELS.listNovels, () => database.listNovels());
   ipc.handle(IPC_CHANNELS.deleteNovel, (_event, id: string) =>
     database.deleteNovel(id),
@@ -103,7 +147,7 @@ export function registerNovelIpc(
       0.5,
       () => {},
       fetch,
-      undefined,
+      AbortSignal.timeout(120_000),
       "disabled",
     );
     return parseScopeAdvice(result.content);
@@ -126,10 +170,34 @@ export function registerNovelIpc(
       0.7,
       () => {},
       fetch,
-      undefined,
+      AbortSignal.timeout(120_000),
       "disabled",
     );
     return parseBriefDraft(result.content);
+  });
+  ipc.handle(IPC_CHANNELS.suggestPersonaLineup, async (_event, novelId: string) => {
+    const novel = await database.getNovel(novelId);
+    if (!novel) throw new Error("作品不存在");
+    const profiles = await database.listModelProfiles(),
+      profile = profiles.find((item) => item.isDefault) ?? profiles[0];
+    if (!profile) throw new Error("请先在设置页配置默认写作模型");
+    const [bible, characters] = await Promise.all([
+      database.listBibleSections(novelId),
+      database.listStoryEntities(novelId),
+    ]);
+    const prompt = personaRecommendationPrompt({ novel, bible, characters });
+    const result = await streamOpenAICompatible(
+      profile,
+      await secrets.get(profile.id),
+      prompt,
+      personaRecommendationMaxOutputTokens(),
+      0.6,
+      () => {},
+      fetch,
+      AbortSignal.timeout(180_000),
+      "disabled",
+    );
+    return parsePersonaRecommendation(result.content, characters);
   });
   ipc.handle(IPC_CHANNELS.importNovelProject, (_event, value: unknown) =>
     database.importNovelProject(parseNovelProject(value)),
@@ -169,6 +237,55 @@ export function registerNovelIpc(
       const entities = await database.listStoryEntities(novelId);
       const chapters = await database.listChapters(novelId);
       const namePool = await database.getNamePool(novelId, novel.genre);
+      const rollingMemory =
+        phase === "structure" && range
+          ? await Promise.all([
+              database.listPlanningCycles(novelId),
+              database.listCharacterStates(novelId),
+              database.listTimelineEvents(novelId),
+              database.listForeshadowThreads(novelId),
+            ]).then(([cycles, characterStates, timeline, foreshadow]) => ({
+              cycles,
+              characterStates,
+              timeline,
+              foreshadow,
+            }))
+          : undefined;
+      // 规划过程事件走同一通道：向导页忙碌弹层实时显示 Amy 正在做什么。
+      const planEventId = `planning:${novelId}`;
+      const emitPlan = async (
+        stage: "plan_started" | "context_build" | "generating" | "plan_received" | "plan_applied" | "retry" | "failed" | "batch_completed",
+        level: "info" | "success" | "warning" | "error",
+        message: string,
+        data: Record<string, unknown> = {},
+      ) => {
+        try {
+          broadcastEvent(
+            await database.saveGenerationEvent({
+              batchId: planEventId,
+              novelId,
+              chapterId: null,
+              stage,
+              level,
+              message,
+              data: { phase, ...data },
+            }),
+          );
+        } catch {
+          // 过程事件失败不影响规划本体。
+        }
+      };
+      const phaseLabel: Record<PlanPhase, string> = {
+        bible: "故事圣经",
+        structure: "当前批次策划包",
+        cast: "人物体系",
+        scenes: "场景与实体",
+      };
+      await emitPlan(
+        "plan_started",
+        "info",
+        `开始生成${phaseLabel[phase]}：读取设定（圣经 ${bible.filter((item) => item.content.trim()).length} 份、实体 ${entities.length} 张、章节 ${chapters.length} 章）`,
+      );
       const prompt = novelPlanningPrompt({
         phase,
         novel,
@@ -177,6 +294,7 @@ export function registerNovelIpc(
         entities,
         chapters,
         range,
+        rollingMemory,
         namePoolText: namePoolText(namePool),
       });
       const run = await database.startPlanningRun({
@@ -190,6 +308,12 @@ export function registerNovelIpc(
         prompt,
       });
       try {
+        await emitPlan(
+          "context_build",
+          "info",
+          `提示已构建（约 ${estimateTokens(prompt).toLocaleString()} tokens，模型 ${profile.modelId}）`,
+          { inputTokens: estimateTokens(prompt), model: profile.modelId },
+        );
         // 规划是结构化输出任务，关闭思考以获得稳定 JSON 并节省 token。
         const result = await streamOpenAICompatible(
             profile,
@@ -199,11 +323,17 @@ export function registerNovelIpc(
             0.7,
             () => {},
             fetch,
-            undefined,
+            AbortSignal.timeout(300_000),
             "disabled",
           ),
           inputTokens = result.inputTokens || estimateTokens(prompt),
           outputTokens = result.outputTokens || estimateTokens(result.content);
+        await emitPlan(
+          "plan_received",
+          "info",
+          `模型已返回 ${result.content.length.toLocaleString()} 字，正在解析并写入`,
+          { outputTokens },
+        );
         // 原始响应先落库，后续解析失败也能检查并重新解析，无需再次调用模型。
         await database.recordPlanningResponse(run.id, {
           rawResponse: result.content,
@@ -224,21 +354,89 @@ export function registerNovelIpc(
           measurement:
             result.inputTokens || result.outputTokens ? "provider" : "estimated",
         });
+        const resolved = await repairPlanningContentOnce({
+          phase,
+          content: result.content,
+          validate: (content) =>
+            validateNovelPlanContent({
+              phase,
+              content,
+              targetChapters: novel.targetChapters,
+              range,
+            }),
+          repair: async (repairPrompt) => {
+            await emitPlan(
+              "retry",
+              "warning",
+              "规划 JSON 解析失败，正在执行一次低温结构修复",
+            );
+            const repaired = await streamOpenAICompatible(
+                profile,
+                apiKey,
+                repairPrompt,
+                planningMaxOutputTokens(phase),
+                0.1,
+                () => {},
+                fetch,
+                AbortSignal.timeout(300_000),
+                "disabled",
+              ),
+              repairInputTokens =
+                repaired.inputTokens || estimateTokens(repairPrompt),
+              repairOutputTokens =
+                repaired.outputTokens || estimateTokens(repaired.content);
+            await database.recordPlanningRepair(run.id, {
+              repairResponse: repaired.content,
+              inputTokens: repairInputTokens,
+              outputTokens: repairOutputTokens,
+              cachedTokens: repaired.cachedTokens,
+            });
+            await database.saveUsage({
+              novelId,
+              chapterId: null,
+              operation: "planning",
+              provider: profile.provider,
+              model: profile.modelId,
+              inputTokens: repairInputTokens,
+              outputTokens: repairOutputTokens,
+              cachedTokens: repaired.cachedTokens,
+              cost: null,
+              measurement:
+                repaired.inputTokens || repaired.outputTokens
+                  ? "provider"
+                  : "estimated",
+            });
+            return repaired.content;
+          },
+        });
         const summary = await applyNovelPlan({
           novel,
           phase,
-          content: result.content,
+          content: resolved.content,
           entities,
           namePool,
           range,
           store: database,
         });
         await database.completePlanningRun(run.id);
+        await emitPlan(
+          "plan_applied",
+          "success",
+          `已写入正史草稿：${summary.sections} 份文档、${summary.entities} 张实体卡、${summary.chapters} 个章节策划`,
+          { sections: summary.sections, entities: summary.entities, chapters: summary.chapters },
+        );
+        await emitPlan("batch_completed", "success", `${phaseLabel[phase]}生成完成，请回到页面审核`, {});
         return summary;
       } catch (error) {
         await database.failPlanningRun(
           run.id,
           error instanceof Error ? error.message : "规划生成失败",
+        );
+        await emitPlan(
+          "failed",
+          "error",
+          `生成失败：${error instanceof Error ? error.message : "未知错误"}`,
+          { error: error instanceof Error ? error.message : "unknown" },
         );
         throw error;
       }
@@ -256,6 +454,17 @@ export function registerNovelIpc(
   );
   ipc.handle(IPC_CHANNELS.listPlanningProposals, (_event, novelId: string) =>
     database.listPlanningProposals(novelId),
+  );
+  ipc.handle(
+    IPC_CHANNELS.createWorkflowRun,
+    (_event, input: CreateWorkflowRunInput) => database.createWorkflowRun(input),
+  );
+  ipc.handle(
+    IPC_CHANNELS.updateWorkflowRun,
+    (_event, input: UpdateWorkflowRunInput) => database.updateWorkflowRun(input),
+  );
+  ipc.handle(IPC_CHANNELS.listWorkflowRuns, (_event, novelId: string) =>
+    database.listWorkflowRuns(novelId),
   );
   ipc.handle(
     IPC_CHANNELS.reviewPlanningProposal,
@@ -363,13 +572,59 @@ export function registerNovelIpc(
       return testOpenAICompatible(profile, key);
     },
   );
+  ipc.handle(IPC_CHANNELS.listStyleTemplates, () =>
+    database.listStyleTemplates(),
+  );
+  ipc.handle(
+    IPC_CHANNELS.analyzeStyleTemplate,
+    async (_event, input: AnalyzeStyleTemplateInput) => {
+      if (input.sampleText.trim().length < 200)
+        throw new Error("样章至少需要 200 字，才能可靠提炼文风");
+      const profile = await database.getModelProfile(input.profileId);
+      if (!profile) throw new Error("Model profile not found");
+      const result = await streamOpenAICompatible(
+          profile,
+          await secrets.get(profile.id),
+          styleAnalysisPrompt(input),
+          3000,
+          0.3,
+          () => {},
+          fetch,
+          AbortSignal.timeout(180_000),
+          "disabled",
+        ),
+        analysis = parseStyleAnalysis(result.content);
+      return database.saveStyleTemplate({
+        name: input.name?.trim() || analysis.name,
+        authorAlias: input.authorAlias?.trim() || analysis.authorAlias,
+        sourceTitle: input.sourceTitle?.trim() || "",
+        sampleText: input.sampleText,
+        contentSummary: analysis.contentSummary,
+        styleSummary: analysis.styleSummary,
+        styleGuide: analysis.styleGuide,
+      });
+    },
+  );
+  ipc.handle(
+    IPC_CHANNELS.saveStyleTemplate,
+    (_event, input: SaveStyleTemplateInput) => database.saveStyleTemplate(input),
+  );
+  ipc.handle(IPC_CHANNELS.deleteStyleTemplate, (_event, id: string) =>
+    database.deleteStyleTemplate(id),
+  );
   ipc.handle(
     IPC_CHANNELS.generateChapter,
     async (event, input: GenerateChapterInput) => {
       const profile = await database.getModelProfile(input.profileId);
       if (!profile) throw new Error("Model profile not found");
-      const key = await secrets.get(profile.id),
+      const template = input.styleTemplateId
+          ? await database.getStyleTemplate(input.styleTemplateId)
+          : null,
+        prompt = applyStyleTemplate(input.contextText, template),
+        key = await secrets.get(profile.id),
         controller = new AbortController();
+      if (input.styleTemplateId && !template)
+        throw new Error("所选文风模板已不存在，请重新选择");
       activeGenerations.set(input.requestId, controller);
       const emit = (data: Omit<GenerationProgress, "requestId">) =>
         event.sender.send(IPC_CHANNELS.generationProgress, {
@@ -381,7 +636,7 @@ export function registerNovelIpc(
         const result = await streamOpenAICompatible(
           profile,
           key,
-          input.contextText,
+          prompt,
           input.maxOutputTokens,
           input.temperature,
           (delta) => emit({ type: "delta", delta }),
@@ -390,7 +645,7 @@ export function registerNovelIpc(
           "disabled",
         );
         const inputTokens =
-            result.inputTokens || estimateTokens(input.contextText),
+            result.inputTokens || estimateTokens(prompt),
           outputTokens = result.outputTokens || estimateTokens(result.content);
         emit({
           type: "usage",
@@ -440,11 +695,82 @@ export function registerNovelIpc(
   ipc.handle(IPC_CHANNELS.cancelGeneration, (_event, requestId: string) => {
     activeGenerations.get(requestId)?.abort();
   });
+  ipc.handle(
+    IPC_CHANNELS.continueChapter,
+    async (_event, input: ContinueChapterInput) => {
+      const profile = await database.getModelProfile(input.profileId);
+      if (!profile) throw new Error("Model profile not found");
+      const result = await streamOpenAICompatible(
+        profile,
+        await secrets.get(profile.id),
+        input.prompt,
+        input.maxOutputTokens,
+        input.temperature,
+        () => {},
+        fetch,
+        AbortSignal.timeout(300_000),
+        "disabled",
+      );
+      const inputTokens = result.inputTokens || estimateTokens(input.prompt),
+        outputTokens =
+          result.outputTokens || estimateTokens(result.content);
+      await database.saveUsage({
+        novelId: input.novelId,
+        chapterId: input.chapterId,
+        operation: "generation",
+        provider: profile.provider,
+        model: profile.modelId,
+        inputTokens,
+        outputTokens,
+        cachedTokens: result.cachedTokens,
+        cost:
+          profile.inputPricePerMillion === null ||
+          profile.outputPricePerMillion === null
+            ? null
+            : ((inputTokens - result.cachedTokens) *
+                profile.inputPricePerMillion +
+                outputTokens * profile.outputPricePerMillion) /
+              1_000_000,
+        measurement:
+          result.inputTokens || result.outputTokens ? "provider" : "estimated",
+      });
+      return {
+        content: result.content,
+        inputTokens,
+        outputTokens,
+        cachedTokens: result.cachedTokens,
+      };
+    },
+  );
   ipc.handle(IPC_CHANNELS.listChapterCandidates, (_event, chapterId: string) =>
     database.listChapterCandidates(chapterId),
   );
-  ipc.handle(IPC_CHANNELS.acceptChapterCandidate, (_event, id: string) =>
-    database.setCandidateStatus(id, "accepted"),
+  ipc.handle(
+    IPC_CHANNELS.updateChapterCandidateContent,
+    (_event, id: string, content: string) =>
+      database.updateChapterCandidateContent(id, content),
+  );
+  ipc.handle(
+    IPC_CHANNELS.acceptChapterCandidate,
+    async (_event, id: string) => {
+      const candidate = await database.setCandidateStatus(id, "accepted");
+      const { pending, job: batchJob } = await finalizeAcceptedCandidate(id);
+      if (batchJob) {
+        const event = await database.saveGenerationEvent({
+          batchId: batchJob.batchId,
+          novelId: candidate.novelId,
+          chapterId: candidate.chapterId,
+          stage: "chapter_accepted",
+          level: "success",
+          message: pending
+            ? `候选稿已写入正史；处理完 ${pending} 条正史建议后才能继续下一章`
+            : "候选稿及正史建议均已处理，可以继续生成下一章",
+          data: { candidateId: id, position: batchJob.position, pendingProposals: pending },
+        });
+        broadcastEvent(event);
+      }
+      return candidate;
+    },
   );
   ipc.handle(IPC_CHANNELS.rejectChapterCandidate, (_event, id: string) =>
     database.setCandidateStatus(id, "rejected"),
@@ -462,8 +788,29 @@ export function registerNovelIpc(
   );
   ipc.handle(
     IPC_CHANNELS.updateFactProposal,
-    (_event, id: string, status: FactProposal["status"]) =>
-      database.updateFactProposal(id, status),
+    async (_event, id: string, status: FactProposal["status"]) => {
+      const proposal = await database.updateFactProposal(id, status),
+        { candidate, pending, job } = await finalizeAcceptedCandidate(
+          proposal.candidateId,
+        );
+      if (
+        candidate?.status === "accepted" &&
+        !pending &&
+        job?.status === "candidate_ready"
+      ) {
+        const event = await database.saveGenerationEvent({
+          batchId: job.batchId,
+          novelId: candidate.novelId,
+          chapterId: proposal.chapterId,
+          stage: "chapter_accepted",
+          level: "success",
+          message: "本章正史建议已全部处理，可以继续生成下一章",
+          data: { candidateId: proposal.candidateId, position: job.position },
+        });
+        broadcastEvent(event);
+      }
+      return proposal;
+    },
   );
   ipc.handle(IPC_CHANNELS.listChapterVersions, (_event, chapterId: string) =>
     database.listChapterVersions(chapterId),
@@ -538,8 +885,15 @@ export function registerNovelIpc(
   );
   ipc.handle(
     IPC_CHANNELS.setBatchStatus,
-    (_event, id: string, status: GenerationBatch["status"]) =>
-      database.setBatchStatus(id, status),
+    (
+      _event,
+      id: string,
+      status: GenerationBatch["status"],
+      patch?: { awaitingReview?: boolean },
+    ) => database.setBatchStatus(id, status, patch),
+  );
+  ipc.handle(IPC_CHANNELS.listGenerationEvents, (_event, id: string) =>
+    database.listGenerationEvents(id),
   );
   ipc.handle(
     IPC_CHANNELS.updateGenerationJob,
@@ -556,4 +910,11 @@ export function registerNovelIpc(
   ipc.handle(IPC_CHANNELS.pauseBackgroundBatch, (_event, id: string) =>
     batchRunner.pause(id),
   );
+}
+
+async function findJobByCandidate(
+  database: NovelDatabase,
+  candidateId: string,
+): Promise<GenerationJob | null> {
+  return database.getJobByCandidate(candidateId);
 }

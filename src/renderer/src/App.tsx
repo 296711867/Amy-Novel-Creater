@@ -8,7 +8,6 @@ import {
   Feather,
   Home,
   Library,
-  Pause,
   Play,
   Plus,
   Settings,
@@ -30,6 +29,7 @@ import {
   type GenerationPolicy,
 } from "@domain/generation";
 import { CYCLE_SIZE_MAX, CYCLE_SIZE_MIN } from "@domain/novel";
+import type { ScopeAdvice } from "@domain/scope-advisor";
 import { useNovelStore } from "./store/novel-store";
 import { WriterPage } from "./pages/WriterPage";
 import { BiblePage } from "./pages/BiblePage";
@@ -42,7 +42,9 @@ import { ChapterGeneratePage } from "./pages/ChapterGeneratePage";
 import { BatchesPage } from "./pages/BatchesPage";
 import { DataPage } from "./pages/DataPage";
 import { PlanningWorkflowPage } from "./pages/PlanningWorkflowPage";
+import { TemplatesPage } from "./pages/TemplatesPage";
 import "./novel-actions.css";
+import "./new-novel.css";
 
 const genres = ["玄幻", "都市", "科幻", "悬疑", "言情", "历史", "奇幻", "其他"];
 
@@ -241,10 +243,11 @@ function NewNovelPage(): React.JSX.Element {
   const navigate = useNavigate();
   const createNovel = useNovelStore((s) => s.createNovel);
   const suggestScope = useNovelStore((s) => s.suggestScope);
-  const clearScopeAdvice = useNovelStore((s) => s.clearScopeAdvice);
-  const scopeAdvice = useNovelStore((s) => s.scopeAdvice);
-  const scopeAdviceBusy = useNovelStore((s) => s.scopeAdviceBusy);
-  const scopeAdviceError = useNovelStore((s) => s.scopeAdviceError);
+  const [scopeAdvice, setScopeAdvice] = useState<ScopeAdvice | null>(null);
+  const [scopeAdviceBusy, setScopeAdviceBusy] = useState(false);
+  const [scopeAdviceError, setScopeAdviceError] = useState("");
+  const [scopeStartedAt, setScopeStartedAt] = useState<number | null>(null);
+  const [scopeElapsed, setScopeElapsed] = useState(0);
   const [form, setForm] = useState({
     title: "",
     genre: "玄幻",
@@ -255,21 +258,66 @@ function NewNovelPage(): React.JSX.Element {
   });
   const [advisorNotes, setAdvisorNotes] = useState("");
   const [advisorOpen, setAdvisorOpen] = useState(false);
+  const [appliedNotice, setAppliedNotice] = useState("");
+  const [creating, setCreating] = useState(false);
+  const [submitError, setSubmitError] = useState("");
   const total = form.targetChapters * form.chapterWords;
+  useEffect(() => {
+    if (!scopeStartedAt) return;
+    const update = () => setScopeElapsed(Math.floor((Date.now() - scopeStartedAt) / 1000));
+    update();
+    const timer = window.setInterval(update, 1000);
+    return () => window.clearInterval(timer);
+  }, [scopeStartedAt]);
   async function submit(event: FormEvent) {
     event.preventDefault();
-    if (!form.title.trim()) return;
-    const novel = await createNovel(form);
-    clearScopeAdvice();
-    navigate(`/novels/${novel.id}/plan`);
+    if (!form.title.trim()) {
+      setSubmitError("请先填写小说名称");
+      const input = document.getElementById("new-novel-title");
+      input?.scrollIntoView({ behavior: "smooth", block: "center" });
+      (input as HTMLInputElement | null)?.focus();
+      return;
+    }
+    setCreating(true);
+    setSubmitError("");
+    try {
+      const novel = await createNovel(form, scopeAdvice ?? undefined);
+      navigate(`/novels/${novel.id}/plan`);
+    } catch (error) {
+      setSubmitError(error instanceof Error ? error.message : "创建小说失败");
+      setCreating(false);
+    }
   }
   async function askAmy() {
-    await suggestScope({
-      title: form.title,
-      genre: form.genre,
-      premise: form.premise,
-      notes: advisorNotes,
-    });
+    setScopeAdviceBusy(true);
+    setScopeAdviceError("");
+    setScopeAdvice(null);
+    setScopeStartedAt(Date.now());
+    try {
+      setScopeAdvice(
+        await suggestScope({
+          title: form.title,
+          genre: form.genre,
+          premise: form.premise,
+          notes: advisorNotes,
+        }),
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "";
+      const timedOut =
+        (error instanceof DOMException && ["AbortError", "TimeoutError"].includes(error.name)) ||
+        /timeout|timed out|aborted|超时/i.test(message);
+      setScopeAdviceError(
+        timedOut
+          ? "生成超过 120 秒，已自动停止。请检查模型连接后重试。"
+          : message
+            ? message
+            : "篇幅建议生成失败",
+      );
+    } finally {
+      setScopeAdviceBusy(false);
+      setScopeStartedAt(null);
+    }
   }
   function applyAdvice() {
     if (!scopeAdvice) return;
@@ -279,9 +327,16 @@ function NewNovelPage(): React.JSX.Element {
       targetChapters: r.totalChapters,
       chapterWords: r.chapterWords,
     }));
+    setAppliedNotice(`已应用：${r.totalChapters} 章 × ${r.chapterWords} 字`);
+    setAdvisorOpen(false);
+    requestAnimationFrame(() =>
+      document
+        .getElementById("novel-scope-fields")
+        ?.scrollIntoView({ behavior: "smooth", block: "center" }),
+    );
   }
   return (
-    <main className="page narrow">
+    <main className="page narrow" aria-busy={scopeAdviceBusy}>
       <div className="eyebrow">NEW STORY PROJECT</div>
       <h1>创建一个新的小说工程</h1>
       <p className="lead">
@@ -291,13 +346,23 @@ function NewNovelPage(): React.JSX.Element {
         <label>
           小说名称
           <input
+            id="new-novel-title"
+            aria-invalid={Boolean(submitError && !form.title.trim())}
             value={form.title}
-            onChange={(e) => setForm({ ...form, title: e.target.value })}
+            onChange={(e) => {
+              setForm({ ...form, title: e.target.value });
+              setSubmitError("");
+            }}
             placeholder="例如：星海余烬"
             autoFocus
           />
+          {submitError && !form.title.trim() && (
+            <small className="field-error" role="alert">
+              {submitError}
+            </small>
+          )}
         </label>
-        <div className="form-row">
+        <div className="form-row" id="novel-scope-fields">
           <label>
             题材
             <select
@@ -348,6 +413,11 @@ function NewNovelPage(): React.JSX.Element {
             />
           </label>
         </div>
+        {appliedNotice && (
+          <div className="scope-applied" role="status">
+            ✓ {appliedNotice}
+          </div>
+        )}
         <label>
           核心设定
           <textarea
@@ -462,12 +532,30 @@ function NewNovelPage(): React.JSX.Element {
           <span>
             预计总字数 <strong>{total.toLocaleString()}</strong>
           </span>
-          <button className="primary" type="submit">
-            <Sparkles size={17} />
-            创建并规划
-          </button>
+          <span className="create-actions">
+            {submitError && form.title.trim() && (
+              <span className="submit-error" role="alert">
+                {submitError}
+              </span>
+            )}
+            <button className="primary" type="submit" disabled={creating || scopeAdviceBusy}>
+              <Sparkles size={17} />
+              {creating ? "正在创建工程…" : "创建并规划"}
+            </button>
+          </span>
         </div>
       </form>
+      {scopeAdviceBusy && (
+        <div className="scope-busy-backdrop" role="dialog" aria-modal="true" aria-label="Amy 正在生成篇幅建议">
+          <div className="scope-busy-card">
+            <span className="scope-busy-spinner" aria-hidden="true" />
+            <h2>Amy 正在制定篇幅策略</h2>
+            <p>正在分析核心设定，估算篇幅与日更节奏，并整理分卷骨架和关键里程碑。</p>
+            <strong>已用时 {scopeElapsed} 秒</strong>
+            <small>本次请求最长等待 120 秒。完成前页面暂时锁定，请不要关闭应用。</small>
+          </div>
+        </div>
+      )}
     </main>
   );
 }
@@ -481,10 +569,15 @@ function GeneratePage(): React.JSX.Element {
   const loadPlanningWorkflow = useNovelStore((s) => s.loadPlanningWorkflow);
   const cycles = useNovelStore((s) => s.planningCycles[novelId] ?? []);
   const loadPlanningCycles = useNovelStore((s) => s.loadPlanningCycles);
+  const styleTemplates = useNovelStore((s) => s.styleTemplates);
+  const loadStyleTemplates = useNovelStore((s) => s.loadStyleTemplates);
+  const modelProfiles = useNovelStore((s) => s.modelProfiles);
+  const loadModelProfiles = useNovelStore((s) => s.loadModelProfiles);
   const [submitError, setSubmitError] = useState("");
   const [policy, setPolicy] = useState<GenerationPolicy>({
     startChapter: 1,
-    endChapter: Math.min(10, novel?.targetChapters ?? 10),
+    // 默认单章审批制：一次只写一章，改稿+正史确认后再创建下一章任务。
+    endChapter: 1,
     chapterWords: novel?.chapterWords ?? 3000,
     continuityCheck: true,
     maxRetries: 2,
@@ -492,6 +585,7 @@ function GeneratePage(): React.JSX.Element {
     outputTokenBudget: 120000,
     concurrency: 1,
     deepThinking: false,
+    approvalGate: true,
   });
   const estimate = useMemo(() => estimateGeneration(policy), [policy]);
   useEffect(() => {
@@ -499,8 +593,22 @@ function GeneratePage(): React.JSX.Element {
       void Promise.all([
         loadPlanningWorkflow(novelId),
         loadPlanningCycles(novelId),
+        loadStyleTemplates(),
+        loadModelProfiles(),
       ]);
-  }, [loadPlanningCycles, loadPlanningWorkflow, novelId]);
+  }, [loadPlanningCycles, loadPlanningWorkflow, loadStyleTemplates, loadModelProfiles, novelId]);
+  const pricedProfile =
+    modelProfiles.find((item) => item.isDefault) ?? modelProfiles[0],
+    estimatedCost =
+      pricedProfile &&
+      pricedProfile.inputPricePerMillion !== null &&
+      pricedProfile.outputPricePerMillion !== null
+        ? (estimate.estimatedContextTokens *
+            pricedProfile.inputPricePerMillion +
+            estimate.estimatedOutputTokens *
+              pricedProfile.outputPricePerMillion) /
+          1_000_000
+        : null;
   const readyCycle = cycles.find((item) =>
     ["ready", "generating"].includes(item.status),
   );
@@ -509,17 +617,34 @@ function GeneratePage(): React.JSX.Element {
     setPolicy((current) => ({
       ...current,
       startChapter: readyCycle.startChapter,
-      endChapter: readyCycle.endChapter,
+      endChapter: Math.min(
+        current.endChapter < readyCycle.startChapter
+          ? readyCycle.startChapter
+          : current.endChapter,
+        readyCycle.endChapter,
+      ),
     }));
   }, [readyCycle?.id]);
   if (!novel) return <Navigate to="/novels" replace />;
   const error = !workflow?.confirmedSteps.includes(9)
     ? "请先完成小说框架向导和一致性检查"
-    : !readyCycle ||
-        readyCycle.startChapter !== policy.startChapter ||
-        readyCycle.endChapter !== policy.endChapter
-      ? "生成范围必须与已通过审核的当前批次策划包一致"
-    : validateChapterRange(policy, novel.targetChapters);
+    : !readyCycle
+      ? "当前没有已通过审核的批次策划包"
+      : policy.startChapter < readyCycle.startChapter ||
+          policy.endChapter > readyCycle.endChapter
+        ? `生成范围需落在已审核的策划包（第 ${readyCycle.startChapter}–${readyCycle.endChapter} 章）内`
+        : validateChapterRange(policy, novel.targetChapters);
+  function pickChapterCount(count: number) {
+    if (!readyCycle) return;
+    setPolicy((current) => ({
+      ...current,
+      endChapter: Math.min(
+        current.startChapter + count - 1,
+        readyCycle.endChapter,
+        novel!.targetChapters,
+      ),
+    }));
+  }
   async function start() {
     if (error) return;
     setSubmitError("");
@@ -535,12 +660,49 @@ function GeneratePage(): React.JSX.Element {
       <div className="eyebrow">
         <Bot size={15} /> BATCH GENERATION
       </div>
-      <h1>配置批量生成任务</h1>
+      <h1>配置生成任务</h1>
       <p className="lead">
-        任务按章节顺序串行执行，后章会读取本批次前章候选稿。支持暂停、恢复、限流退避
-        与硬 Token 预算，不会因一次失败丢失整批结果。
+        单章审批制：每章生成完即可浏览和修改，接受候选稿、处理完正史建议后，
+        再继续生成下一章。默认一次只生成 1 章，不会自动连写。
       </p>
       <section className="form-card">
+        <div className="switch-row">
+          <div>
+            <b>本次生成章数</b>
+            <span>
+              从第 {policy.startChapter} 章开始，本批完成后自动停止。章数越多消耗越大。
+            </span>
+          </div>
+          <div className="chapter-count-picker">
+            {[1, 3, 5, 10].map((count) => (
+              <button
+                key={count}
+                className={policy.endChapter - policy.startChapter + 1 === count ? "on" : ""}
+                onClick={() => pickChapterCount(count)}
+              >
+                {count} 章
+              </button>
+            ))}
+            {readyCycle && (
+              <button
+                className={
+                  policy.endChapter === readyCycle.endChapter &&
+                  policy.endChapter - policy.startChapter + 1 > 10
+                    ? "on"
+                    : ""
+                }
+                onClick={() =>
+                  setPolicy((current) => ({
+                    ...current,
+                    endChapter: readyCycle.endChapter,
+                  }))
+                }
+              >
+                整批（至第 {readyCycle.endChapter} 章）
+              </button>
+            )}
+          </div>
+        </div>
         <div className="form-row">
           <label>
             起始章节
@@ -587,6 +749,19 @@ function GeneratePage(): React.JSX.Element {
             <i />
           </button>
         </div>
+        <label>
+          文风模板
+          <select
+            value={policy.styleTemplateId ?? ""}
+            onChange={(e) => setPolicy({ ...policy, styleTemplateId: e.target.value || undefined })}
+          >
+            <option value="">AI 根据作品设定自由发挥</option>
+            {styleTemplates.map((item) => (
+              <option key={item.id} value={item.id}>{item.name} · {item.authorAlias}</option>
+            ))}
+          </select>
+          <small>仅注入提炼后的风格指令，不会把原样章放进小说上下文。</small>
+        </label>
         <div className="switch-row">
           <div>
             <b>深度思考写作</b>
@@ -604,8 +779,28 @@ function GeneratePage(): React.JSX.Element {
             <i />
           </button>
         </div>
+        <div className="switch-row">
+          <div>
+            <b>单章审批制</b>
+            <span>
+              开启时每章候选稿生成后暂停，等你在“生成任务”页改稿、接受候选稿并处理正史
+              建议后，才继续下一章；关闭则本批连续生成（后章只能参考前章候选稿）
+            </span>
+          </div>
+          <button
+            className={policy.approvalGate !== false ? "switch on" : "switch"}
+            onClick={() =>
+              setPolicy({
+                ...policy,
+                approvalGate: policy.approvalGate === false,
+              })
+            }
+          >
+            <i />
+          </button>
+        </div>
         <label>
-          单批最大输出 Token
+          单批最大输出 Token（停止边界）
           <input
             type="number"
             step="10000"
@@ -617,7 +812,10 @@ function GeneratePage(): React.JSX.Element {
               })
             }
           />
-          <small>达到预算时安全暂停，修改模型或预算后可以继续。</small>
+          <small>
+            达到预算立即安全暂停，不会生成到一半失控；修改预算后可继续。当前预计输出 ≈{" "}
+            {estimate.estimatedOutputTokens.toLocaleString()} tokens。
+          </small>
         </label>
         <div className="form-row">
           <label>
@@ -658,6 +856,14 @@ function GeneratePage(): React.JSX.Element {
             <span>上下文调用</span>
             <b>≈ {estimate.estimatedContextTokens.toLocaleString()} tokens</b>
           </div>
+          <div>
+            <span>预计费用</span>
+            <b>
+              {estimatedCost !== null
+                ? `≈ ¥${estimatedCost.toFixed(2)}`
+                : "未配置价格"}
+            </b>
+          </div>
         </div>
         <div className="form-footer">
           <NavLink className="secondary" to={`/novels/${novelId}/context`}>
@@ -670,25 +876,6 @@ function GeneratePage(): React.JSX.Element {
           </button>
         </div>
       </section>
-    </main>
-  );
-}
-
-function Placeholder({
-  title,
-  description,
-}: {
-  title: string;
-  description: string;
-}): React.JSX.Element {
-  return (
-    <main className="page">
-      <div className="empty-state">
-        <Pause size={42} />
-        <h1>{title}</h1>
-        <p>{description}</p>
-        <span className="status-pill">架构已预留 · 后续阶段接入</span>
-      </div>
     </main>
   );
 }
@@ -737,10 +924,13 @@ function FirstRunGuide(): React.JSX.Element | null {
 
 export default function App(): React.JSX.Element {
   const load = useNovelStore((s) => s.loadNovels),
-    initialized = useNovelStore((s) => s.initialized);
+    initialized = useNovelStore((s) => s.initialized),
+    ensureActivityListener = useNovelStore((s) => s.ensureActivityListener);
   useEffect(() => {
+    // 生成/规划过程事件全程订阅：进任何页面都能收到实时推送。
+    ensureActivityListener();
     void load();
-  }, [load]);
+  }, [load, ensureActivityListener]);
   if (!initialized)
     return (
       <div className="app-loading">
@@ -782,15 +972,7 @@ export default function App(): React.JSX.Element {
           <Route path="/settings" element={<SettingsPage />} />
           <Route path="/batches" element={<BatchesPage />} />
           <Route path="/data" element={<DataPage />} />
-          <Route
-            path="/templates"
-            element={
-              <Placeholder
-                title="创作模板"
-                description="题材、故事结构与 Prompt/Skill 模板将在后续阶段加入。"
-              />
-            }
-          />
+          <Route path="/templates" element={<TemplatesPage />} />
           <Route path="/usage" element={<UsagePage />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>

@@ -24,7 +24,9 @@
     "typecheck:node": "tsc --noEmit -p tsconfig.node.json --composite false",
     "typecheck:web": "tsc --noEmit -p tsconfig.web.json --composite false",
     "typecheck": "pnpm typecheck:node && pnpm typecheck:web",
-    "test": "vitest run"
+    "test": "vitest run",
+    "check": "pnpm typecheck && pnpm test",
+    "verify": "pnpm check && pnpm build:web && pnpm build"
   },
   "dependencies": {
     "@electron-toolkit/preload": "^3.0.2",

@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { NovelDatabase } from "../../src/main/db/database";
 import type { NovelProjectBundle } from "../../src/domain/project-export";
+import { entityShortRef } from "../../src/domain/story-bible";
 
 let database: NovelDatabase | undefined;
 afterEach(() => database?.close());
@@ -21,6 +22,7 @@ describe("project restore", () => {
           targetWords: 1000,
           targetChapters: 1,
           chapterWords: 1000,
+          cycleSize: 10,
           status: "writing",
           createdAt: now,
           updatedAt: now,
@@ -98,6 +100,7 @@ describe("project restore", () => {
         candidates: [],
         workflow: {
           novelId: "old",
+          scopeAdvice: null,
           brief: {
             audience: "硬科幻读者",
             style: "克制",
@@ -110,6 +113,19 @@ describe("project restore", () => {
           confirmedSteps: [1, 2],
           updatedAt: now,
         },
+        planningCycles: [{
+          id: "old-cycle", novelId: "old", startChapter: 1, endChapter: 1,
+          status: "plan_review", goal: "启航", openingState: "母星",
+          climax: "起飞", expectedClosingState: "离开", actualClosingState: "",
+          createdAt: now, updatedAt: now,
+        }],
+        planningProposals: [{
+          id: "old-proposal", novelId: "old", cycleId: "old-cycle",
+          startChapter: 1, endChapter: 1, action: "update",
+          targetType: "character", targetRef: "E-OLDE1", targetName: "林舟",
+          patch: { summary: "领航员" }, reason: "补充", status: "pending",
+          createdAt: now, updatedAt: now,
+        }],
       };
     const restored = await database.importNovelProject(bundle),
       chapters = await database.listChapters(restored.id),
@@ -127,5 +143,7 @@ describe("project restore", () => {
       confirmedSteps: [1, 2],
       brief: { audience: "硬科幻读者" },
     });
+    expect((await database.listPlanningProposals(restored.id))[0].targetRef)
+      .toBe(entityShortRef(entities[0]));
   });
 });

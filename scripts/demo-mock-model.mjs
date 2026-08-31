@@ -8,6 +8,7 @@ const PROSE =
   "星图还在脑子里，只是再也想不起娘指给他看时说过什么。桅顶的铜铃又响了一声，第七声。雾墙在灯前退开一线，露出一截黑色的塔基。";
 
 function phaseOf(prompt) {
+  if (prompt.includes("小说文风分析师")) return "style";
   if (prompt.includes("开书简报代笔")) return "brief";
   if (prompt.includes("开书顾问")) return "advisory";
   if (prompt.includes("人物分层") || prompt.includes("完整人物体系")) return "cast";
@@ -57,7 +58,16 @@ const BRIEF_DRAFT = {
   ending: '主角重定灯约、雾海退去；代价是与灯灵的联结永久断开',
 };
 
+const STYLE_ANALYSIS = {
+  name: "雾港留白",
+  authorAlias: "听潮客",
+  contentSummary: "主人公在雨夜穿过旧城，携带一封信走向尚未揭晓的会面。",
+  styleSummary: "第三人称限知，短句与中短段落交替；以雨、灯与脚步等感官细节承载克制情绪，对白节省，转折留白，节奏安静但持续蓄压。",
+  styleGuide: "使用第三人称限知；句子以短句和中句为主；每段只推进一个动作或感受；优先写可听见、可触碰的环境细节；对白少而含蓄；重要情绪不要直说，用动作与物件承载；段尾保留轻微悬念。不得复用来源样章的专名、情节、独特比喻或连续原句。",
+};
+
 const RESPONSES = {
+  style: () => STYLE_ANALYSIS,
   brief: () => BRIEF_DRAFT,
   advisory: () => ADVISORY,
   bible: () => ({
@@ -180,16 +190,22 @@ const server = createServer((req, res) => {
   req.on("end", () => {
     const payload = JSON.parse(body || "{}");
     const prompt = payload.messages?.[0]?.content ?? "";
-    if (payload.stream) return sse(res, PROSE.repeat(3));
+    const phase = phaseOf(prompt);
+    if (payload.stream)
+      return sse(
+        res,
+        phase === "style" ? JSON.stringify(STYLE_ANALYSIS) : PROSE.repeat(3),
+      );
     setTimeout(() => {
       res.writeHead(200, { "content-type": "application/json", ...cors });
       res.end(
         JSON.stringify({
-          choices: [{ message: { content: JSON.stringify(RESPONSES[phaseOf(prompt)](prompt)) } }],
+          choices: [{ message: { content: JSON.stringify(RESPONSES[phase](prompt)) } }],
           usage: { prompt_tokens: 3200, completion_tokens: 2600 },
         }),
       );
     }, 600);
   });
 });
-server.listen(8787, () => console.log("demo mock model on http://127.0.0.1:8787/v1"));
+const port = Number(process.env.AMY_MOCK_PORT || 8787);
+server.listen(port, () => console.log(`demo mock model on http://127.0.0.1:${port}/v1`));

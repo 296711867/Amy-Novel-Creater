@@ -24,6 +24,7 @@ const novel: Novel = {
   targetWords: 300000,
   targetChapters: 100,
   chapterWords: 3000,
+  cycleSize: 10,
   status: "planning",
   createdAt: "2026-01-01T00:00:00.000Z",
   updatedAt: "2026-01-01T00:00:00.000Z",
@@ -112,7 +113,7 @@ describe("scene cards", () => {
       profile: {
         purpose: "抛出选择题",
         visualAnchors: ["青铜门", "五步石板"],
-      },
+      } as unknown as StoryEntity["profile"],
     });
     expect(fromArray?.visualAnchors).toEqual(["青铜门", "五步石板"]);
     expect(
@@ -152,6 +153,8 @@ describe("cast & scene planning", () => {
       "可用姓名示例：楚听澜",
     );
     expect(prompt).toContain("林一");
+    expect(prompt).toContain("entityRef");
+    expect(prompt).toMatch(/E-[A-F0-9]{8}/);
     expect(prompt).toContain("楚听澜");
   });
   it("embeds locations in scene prompt", () => {

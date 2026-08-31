@@ -17,7 +17,7 @@ export interface ScopeAdvisorInput {
   notes?: string;
 }
 
-const advice = z.object({
+export const scopeAdviceSchema = z.object({
   recommendation: z.object({
     tierLabel: z.string().min(1),
     totalChapters: z.number().int().min(10).max(3000),
@@ -49,7 +49,7 @@ const advice = z.object({
   notes: z.array(z.string().min(1)).max(6),
 });
 
-export type ScopeAdvice = z.infer<typeof advice>;
+export type ScopeAdvice = z.infer<typeof scopeAdviceSchema>;
 
 export function scopeAdvisoryPrompt(
   input: ScopeAdvisorInput,
@@ -64,7 +64,7 @@ export function scopeAdvisoryPrompt(
 }
 
 export function parseScopeAdvice(raw: string): ScopeAdvice {
-  return advice.parse(JSON.parse(extractPlanningJson(raw)));
+  return scopeAdviceSchema.parse(JSON.parse(extractPlanningJson(raw)));
 }
 
 export function scopeAdvisoryMaxOutputTokens(): number {

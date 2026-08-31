@@ -14,6 +14,7 @@ const novel = {
   targetWords: 2000,
   targetChapters: 2,
   chapterWords: 1000,
+  cycleSize: 10,
   status: "writing" as const,
   createdAt: "",
   updatedAt: "",

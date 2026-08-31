@@ -9,6 +9,7 @@ import {
   type Novel,
 } from "@domain/novel";
 import type { NovelProjectBundle } from "@domain/project-export";
+import { remapEntityShortRef } from "@domain/story-bible";
 import type { DbRow } from "./shared";
 
 const NOVEL_COLUMNS =
@@ -67,6 +68,8 @@ export function createNovelsRepository(client: Client) {
         "DELETE FROM story_volumes WHERE novel_id=?",
         "DELETE FROM name_pools WHERE novel_id=?",
         "DELETE FROM planning_runs WHERE novel_id=?",
+        "DELETE FROM workflow_runs WHERE novel_id=?",
+        "DELETE FROM planning_proposals WHERE novel_id=?",
         "DELETE FROM planning_cycles WHERE novel_id=?",
         "DELETE FROM planning_workflows WHERE novel_id=?",
         "DELETE FROM chapters WHERE novel_id=?",
@@ -193,12 +196,13 @@ export function createNovelsRepository(client: Client) {
       });
     for (const item of bundle.planningRuns ?? [])
       commands.push({
-        sql: "INSERT INTO planning_runs VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        sql: "INSERT INTO planning_runs (id,novel_id,phase,start_chapter,end_chapter,profile_id,provider,model,prompt_hash,raw_response,input_tokens,output_tokens,cached_tokens,status,error,created_at,updated_at,repair_response) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         args: [
           nanoid(), id, item.phase, item.startChapter, item.endChapter,
           item.profileId, item.provider, item.model, item.promptHash,
           item.rawResponse, item.inputTokens, item.outputTokens,
-          item.cachedTokens, item.status, item.error, item.createdAt, item.updatedAt,
+          item.cachedTokens, item.status, item.error, item.createdAt,
+          item.updatedAt, item.repairResponse,
         ],
       });
     for (const item of bundle.planningCycles ?? [])
@@ -212,12 +216,17 @@ export function createNovelsRepository(client: Client) {
         ],
       });
     for (const item of bundle.planningProposals ?? [])
-      if (cycleIds.has(item.cycleId))
+      if (item.cycleId === "entity-merge" || cycleIds.has(item.cycleId))
         commands.push({
-          sql: "INSERT INTO planning_proposals VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+          sql: "INSERT INTO planning_proposals (id,novel_id,cycle_id,start_chapter,end_chapter,action,target_type,target_ref,target_name,patch_json,reason,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
           args: [
-            nanoid(), id, cycleIds.get(item.cycleId)!, item.startChapter,
-            item.endChapter, item.action, item.targetType, item.targetName,
+            nanoid(), id,
+            item.cycleId === "entity-merge"
+              ? "entity-merge"
+              : cycleIds.get(item.cycleId)!,
+            item.startChapter, item.endChapter, item.action, item.targetType,
+            remapEntityShortRef(item.targetRef, bundle.entities, entityIds) ?? null,
+            item.targetName,
             JSON.stringify(item.patch), item.reason, item.status,
             item.createdAt, item.updatedAt,
           ],

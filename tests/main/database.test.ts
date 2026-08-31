@@ -166,6 +166,19 @@ describe("NovelDatabase", () => {
     ).rejects.toThrow("请先完成小说框架十步向导");
     const workflow = await database.savePlanningWorkflow({
       ...(await database.getPlanningWorkflow(created.novel.id)),
+      scopeAdvice: {
+        recommendation: {
+          tierLabel: "试水档",
+          totalChapters: 80,
+          chapterWords: 2500,
+          dailyChapters: 1,
+          estimatedDays: 80,
+          reason: "先完成一个可验证的完整故事闭环",
+        },
+        milestones: [],
+        volumeSkeleton: [],
+        notes: [],
+      },
       brief: {
         audience: "科幻读者",
         style: "克制",
@@ -182,6 +195,38 @@ describe("NovelDatabase", () => {
       novelId: created.novel.id,
       confirmedSteps: [1, 2, 3, 4, 5, 6, 7, 8, 9],
     });
+    expect(
+      (await database.getPlanningWorkflow(created.novel.id)).scopeAdvice
+        ?.recommendation.totalChapters,
+    ).toBe(80);
+    const planningRun = await database.startPlanningRun({
+      novelId: created.novel.id,
+      phase: "bible",
+      profileId: "planning-profile",
+      provider: "local",
+      model: "mock",
+      prompt: "生成故事圣经",
+    });
+    await database.recordPlanningResponse(planningRun.id, {
+      rawResponse: '{"broken":',
+      inputTokens: 10,
+      outputTokens: 5,
+      cachedTokens: 1,
+    });
+    await database.recordPlanningRepair(planningRun.id, {
+      repairResponse: '{"sections":[]}',
+      inputTokens: 8,
+      outputTokens: 4,
+      cachedTokens: 0,
+    });
+    expect((await database.listPlanningRuns(created.novel.id))[0]).toMatchObject(
+      {
+        rawResponse: '{"broken":',
+        repairResponse: '{"sections":[]}',
+        inputTokens: 18,
+        outputTokens: 9,
+      },
+    );
     for (const [kind, content] of [
       ["world", "星际航行遵守光速限制。"],
       ["style", "克制的第三人称限知。"],
@@ -292,6 +337,62 @@ describe("NovelDatabase", () => {
       expectedClosingState: "进入航道",
       actualClosingState: "",
     });
+    const gatedCandidate = await database.createChapterCandidate({
+        novelId: created.novel.id,
+        chapterId: plannedChapters[0].id,
+        profileId: profile.id,
+        contextHash: "fact-gate",
+        content: "第一章正史候选稿。",
+        inputTokens: 10,
+        outputTokens: 10,
+        cachedTokens: 0,
+      }),
+      [pendingProposal] = await database.saveFactProposals(
+        gatedCandidate.id,
+        plannedChapters[0].id,
+        [{ kind: "timeline", title: "启航", payload: { summary: "启航" } }],
+      );
+    await database.setCandidateStatus(gatedCandidate.id, "accepted");
+    await expect(
+      database.savePlanningCycle({
+        novelId: created.novel.id,
+        startChapter: 1,
+        endChapter: 2,
+        status: "completed",
+        goal: "完成首次远航",
+        openingState: "仍在母星",
+        climax: "突破封锁",
+        expectedClosingState: "进入航道",
+        actualClosingState: "已经启航",
+      }),
+    ).rejects.toThrow("仍有 1 条正史建议未处理");
+    await database.updateFactProposal(pendingProposal.id, "accepted");
+    expect(
+      (
+        await database.savePlanningCycle({
+          novelId: created.novel.id,
+          startChapter: 1,
+          endChapter: 2,
+          status: "completed",
+          goal: "完成首次远航",
+          openingState: "仍在母星",
+          climax: "突破封锁",
+          expectedClosingState: "进入航道",
+          actualClosingState: "已经启航",
+        })
+      ).status,
+    ).toBe("completed");
+    await database.savePlanningCycle({
+      novelId: created.novel.id,
+      startChapter: 1,
+      endChapter: 2,
+      status: "ready",
+      goal: "完成首次远航",
+      openingState: "仍在母星",
+      climax: "突破封锁",
+      expectedClosingState: "进入航道",
+      actualClosingState: "已经启航",
+    });
     const batchResult = await database.createGenerationBatch(created.novel.id, {
       startChapter: 1,
       endChapter: 2,
@@ -325,8 +426,45 @@ describe("NovelDatabase", () => {
     );
   });
 
+  it("deduplicates accepted entity additions across planning cycles", async () => {
+    const created = await database!.createNovel({
+        title: "提案去重",
+        genre: "科幻",
+        premise: "记忆代价",
+        targetChapters: 20,
+        chapterWords: 1000,
+      }),
+      proposal = {
+        action: "add" as const,
+        targetType: "term" as const,
+        targetName: "记忆耗尽效应",
+        patch: { summary: "连续使用能力会耗尽记忆" },
+        reason: "第一周期需要",
+      },
+      [first] = await database!.addPlanningProposals(
+        created.novel.id,
+        "cycle-1",
+        1,
+        10,
+        [proposal],
+      );
+    await database!.updatePlanningProposalStatus(first.id, "accepted");
+    expect(
+      await database!.addPlanningProposals(
+        created.novel.id,
+        "cycle-2",
+        11,
+        20,
+        [{ ...proposal, reason: "第二周期重复提出" }],
+      ),
+    ).toEqual([]);
+    expect(await database!.listPlanningProposals(created.novel.id)).toHaveLength(
+      1,
+    );
+  });
+
   it("persists and updates the rolling cycle size", async () => {
-    const created = await database.createNovel({
+    const created = await database!.createNovel({
       title: "批次大小测试",
       genre: "玄幻",
       premise: "测试每批章数",
@@ -334,7 +472,7 @@ describe("NovelDatabase", () => {
       chapterWords: 1000,
     });
     expect(created.novel.cycleSize).toBe(10);
-    const custom = await database.createNovel({
+    const custom = await database!.createNovel({
       title: "自定义批次",
       genre: "科幻",
       premise: "五章一批",
@@ -343,11 +481,103 @@ describe("NovelDatabase", () => {
       cycleSize: 5,
     });
     expect(custom.novel.cycleSize).toBe(5);
-    expect((await database.getNovel(custom.novel.id))?.cycleSize).toBe(5);
-    const updated = await database.updateCycleSize(custom.novel.id, 99);
+    expect((await database!.getNovel(custom.novel.id))?.cycleSize).toBe(5);
+    const updated = await database!.updateCycleSize(custom.novel.id, 99);
     expect(updated.cycleSize).toBe(15);
-    expect((await database.getNovel(custom.novel.id))?.cycleSize).toBe(15);
-    await database.deleteNovel(created.novel.id);
-    await database.deleteNovel(custom.novel.id);
+    expect((await database!.getNovel(custom.novel.id))?.cycleSize).toBe(15);
+    await database!.deleteNovel(created.novel.id);
+    await database!.deleteNovel(custom.novel.id);
+  });
+
+  it("persists reusable style templates", async () => {
+    const saved = await database!.saveStyleTemplate({
+      name: "冷雾短句",
+      authorAlias: "北港客",
+      sourceTitle: "旧港",
+      sampleText: "一段本地保存的样章。",
+      contentSummary: "旅人夜渡。",
+      styleSummary: "短句、克制。",
+      styleGuide: "多用短句；不要复用来源情节。",
+    });
+    expect(await database!.getStyleTemplate(saved.id)).toEqual(saved);
+    expect(await database!.listStyleTemplates()).toEqual([saved]);
+    await database!.deleteStyleTemplate(saved.id);
+    expect(await database!.listStyleTemplates()).toEqual([]);
+  });
+
+  it("persists workflow runs for pause and resume across sessions", async () => {
+    const created = await database!.createNovel({
+      title: "工作流测试",
+      genre: "科幻",
+      premise: "测试运行状态持久化",
+      targetChapters: 20,
+      chapterWords: 2000,
+    });
+    const policy = {
+      startChapter: 1,
+      endChapter: 10,
+      chapterWords: 2000,
+      continuityCheck: true,
+      maxRetries: 2,
+      approvalMode: "candidate" as const,
+      outputTokenBudget: 60000,
+    };
+    const run = await database!.createWorkflowRun({
+      novelId: created.novel.id,
+      mode: "checkpoint",
+      config: { generationPolicy: policy, maxPhaseRetries: 2 },
+    });
+    // 新建的运行从第一个规划阶段开始，处于待恢复状态。
+    expect(run).toMatchObject({
+      novelId: created.novel.id,
+      mode: "checkpoint",
+      currentPhase: "bible",
+      status: "paused",
+      checkpoint: null,
+      attempt: 0,
+      batchId: null,
+    });
+
+    const paused = await database!.updateWorkflowRun({
+      id: run.id,
+      currentPhase: "cast",
+      status: "paused",
+      checkpoint: "phase_review",
+    });
+    expect(paused).toMatchObject({
+      currentPhase: "cast",
+      status: "paused",
+      checkpoint: "phase_review",
+    });
+
+    // “会话重启”后从持久化状态恢复：列表按时间倒序，部分更新不丢字段。
+    const resumed = await database!.updateWorkflowRun({
+      id: run.id,
+      status: "running",
+      checkpoint: null,
+      batchId: "batch-1",
+    });
+    expect(resumed).toMatchObject({
+      currentPhase: "cast",
+      status: "running",
+      batchId: "batch-1",
+      config: { generationPolicy: policy, maxPhaseRetries: 2 },
+    });
+    const listed = await database!.listWorkflowRuns(created.novel.id);
+    expect(listed).toHaveLength(1);
+    expect(listed[0]).toEqual(resumed);
+
+    const failed = await database!.updateWorkflowRun({
+      id: run.id,
+      status: "failed",
+      attempt: 2,
+      error: "规划 JSON 两次解析失败",
+    });
+    expect(failed.error).toBe("规划 JSON 两次解析失败");
+    expect(failed.attempt).toBe(2);
+
+    // 删除小说时运行记录级联清理。
+    await database!.deleteNovel(created.novel.id);
+    expect(await database!.listWorkflowRuns(created.novel.id)).toEqual([]);
   });
 });

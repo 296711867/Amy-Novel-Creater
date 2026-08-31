@@ -10,8 +10,9 @@ export class SecretVault {
         string,
         string
       >;
-    } catch {
-      return {};
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return {};
+      throw new Error("密钥存储读取失败，文件可能已损坏", { cause: error });
     }
   }
   async set(id: string, value: string): Promise<void> {

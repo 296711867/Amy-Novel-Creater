@@ -12,6 +12,7 @@ export function ChapterGeneratePage(): React.JSX.Element {
       (s.chapters[novelId] ?? EMPTY).find((c) => c.id === chapterId),
     ),
     profiles = useNovelStore((s) => s.modelProfiles),
+    styleTemplates = useNovelStore((s) => s.styleTemplates),
     // 候选稿与“生成中”都来自全局 store：切页回来依然能看到进行中状态和最新候选。
     candidate = useNovelStore(
       (s) => (s.candidates[chapterId] ?? EMPTY)[0] ?? null,
@@ -19,6 +20,7 @@ export function ChapterGeneratePage(): React.JSX.Element {
     active = useNovelStore((s) => s.activeRequests[chapterId]),
     store = useNovelStore();
   const [profileId, setProfileId] = useState(""),
+    [styleTemplateId, setStyleTemplateId] = useState(""),
     [maxTokens, setMaxTokens] = useState(6000),
     [temperature, setTemperature] = useState(0.8),
     [stream, setStream] = useState(""),
@@ -38,6 +40,7 @@ export function ChapterGeneratePage(): React.JSX.Element {
     void Promise.all([
       store.loadChapters(novelId),
       store.loadModelProfiles(),
+      store.loadStyleTemplates(),
       store.loadCandidates(chapterId),
     ]);
   }, [novelId, chapterId]);
@@ -74,6 +77,7 @@ export function ChapterGeneratePage(): React.JSX.Element {
           contextHash: pack.contentHash,
           maxOutputTokens: output,
           temperature,
+          styleTemplateId: styleTemplateId || undefined,
         },
         (event) => {
           if (event.type === "delta" && event.delta)
@@ -127,6 +131,15 @@ export function ChapterGeneratePage(): React.JSX.Element {
                 <option key={p.id} value={p.id}>
                   {p.name} · {p.modelId}
                 </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            文风模板
+            <select value={styleTemplateId} onChange={(e) => setStyleTemplateId(e.target.value)}>
+              <option value="">AI 根据作品自由发挥</option>
+              {styleTemplates.map((item) => (
+                <option key={item.id} value={item.id}>{item.name} · {item.authorAlias}</option>
               ))}
             </select>
           </label>

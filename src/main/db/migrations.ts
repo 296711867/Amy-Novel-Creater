@@ -31,13 +31,18 @@ const MIGRATIONS: string[] = [
   `CREATE TABLE IF NOT EXISTS continuity_findings (id TEXT PRIMARY KEY, candidate_id TEXT NOT NULL, chapter_id TEXT NOT NULL, severity TEXT NOT NULL, category TEXT NOT NULL, message TEXT NOT NULL, evidence TEXT NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
   `CREATE TABLE IF NOT EXISTS fact_proposals (id TEXT PRIMARY KEY, candidate_id TEXT NOT NULL, chapter_id TEXT NOT NULL, kind TEXT NOT NULL, title TEXT NOT NULL, payload_json TEXT NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
   `CREATE TABLE IF NOT EXISTS name_pools (novel_id TEXT PRIMARY KEY, genre TEXT NOT NULL, surnames_json TEXT NOT NULL, given_names_json TEXT NOT NULL, used_names_json TEXT NOT NULL, updated_at TEXT NOT NULL)`,
-  `CREATE TABLE IF NOT EXISTS planning_workflows (novel_id TEXT PRIMARY KEY REFERENCES novels(id) ON DELETE CASCADE, brief_json TEXT NOT NULL DEFAULT '{}', confirmed_steps_json TEXT NOT NULL DEFAULT '[]', updated_at TEXT NOT NULL)`,
+  `CREATE TABLE IF NOT EXISTS planning_workflows (novel_id TEXT PRIMARY KEY REFERENCES novels(id) ON DELETE CASCADE, scope_advice_json TEXT NOT NULL DEFAULT 'null', brief_json TEXT NOT NULL DEFAULT '{}', confirmed_steps_json TEXT NOT NULL DEFAULT '[]', updated_at TEXT NOT NULL)`,
   `CREATE TABLE IF NOT EXISTS planning_runs (id TEXT PRIMARY KEY, novel_id TEXT NOT NULL REFERENCES novels(id) ON DELETE CASCADE, phase TEXT NOT NULL, start_chapter INTEGER, end_chapter INTEGER, profile_id TEXT NOT NULL, provider TEXT NOT NULL, model TEXT NOT NULL, prompt_hash TEXT NOT NULL, raw_response TEXT NOT NULL DEFAULT '', input_tokens INTEGER NOT NULL DEFAULT 0, output_tokens INTEGER NOT NULL DEFAULT 0, cached_tokens INTEGER NOT NULL DEFAULT 0, status TEXT NOT NULL, error TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
   `CREATE INDEX IF NOT EXISTS planning_runs_novel_time ON planning_runs(novel_id, created_at DESC)`,
   `CREATE TABLE IF NOT EXISTS planning_cycles (id TEXT PRIMARY KEY, novel_id TEXT NOT NULL REFERENCES novels(id) ON DELETE CASCADE, start_chapter INTEGER NOT NULL, end_chapter INTEGER NOT NULL, status TEXT NOT NULL, goal TEXT NOT NULL DEFAULT '', opening_state TEXT NOT NULL DEFAULT '', climax TEXT NOT NULL DEFAULT '', expected_closing_state TEXT NOT NULL DEFAULT '', actual_closing_state TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
   `CREATE INDEX IF NOT EXISTS planning_cycles_novel_range ON planning_cycles(novel_id, start_chapter, end_chapter, created_at DESC)`,
   `CREATE TABLE IF NOT EXISTS planning_proposals (id TEXT PRIMARY KEY, novel_id TEXT NOT NULL REFERENCES novels(id) ON DELETE CASCADE, cycle_id TEXT NOT NULL, start_chapter INTEGER NOT NULL, end_chapter INTEGER NOT NULL, action TEXT NOT NULL, target_type TEXT NOT NULL, target_name TEXT NOT NULL, patch_json TEXT NOT NULL DEFAULT '{}', reason TEXT NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
   `CREATE INDEX IF NOT EXISTS planning_proposals_novel_range ON planning_proposals(novel_id, start_chapter, end_chapter, status)`,
+  `CREATE TABLE IF NOT EXISTS style_templates (id TEXT PRIMARY KEY, name TEXT NOT NULL, author_alias TEXT NOT NULL, source_title TEXT NOT NULL DEFAULT '', sample_text TEXT NOT NULL, content_summary TEXT NOT NULL, style_summary TEXT NOT NULL, style_guide TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
+  `CREATE TABLE IF NOT EXISTS generation_events (id TEXT PRIMARY KEY, batch_id TEXT NOT NULL, novel_id TEXT NOT NULL, chapter_id TEXT, stage TEXT NOT NULL, level TEXT NOT NULL DEFAULT 'info', message TEXT NOT NULL, data_json TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL)`,
+  `CREATE INDEX IF NOT EXISTS generation_events_batch_time ON generation_events(batch_id, created_at)`,
+  `CREATE TABLE IF NOT EXISTS workflow_runs (id TEXT PRIMARY KEY, novel_id TEXT NOT NULL REFERENCES novels(id) ON DELETE CASCADE, mode TEXT NOT NULL, current_phase TEXT NOT NULL, status TEXT NOT NULL, checkpoint TEXT, config_json TEXT NOT NULL, attempt INTEGER NOT NULL DEFAULT 0, batch_id TEXT, error TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
+  `CREATE INDEX IF NOT EXISTS workflow_runs_novel_time ON workflow_runs(novel_id, created_at DESC)`,
 ];
 
 export async function runMigrations(client: Client): Promise<void> {
@@ -55,4 +60,35 @@ export async function runMigrations(client: Client): Promise<void> {
     await client.execute(
       `ALTER TABLE novels ADD COLUMN cycle_size INTEGER NOT NULL DEFAULT 10`,
     );
+  const workflowColumns = await client.execute(`PRAGMA table_info(planning_workflows)`);
+  if (!workflowColumns.rows.some((row) => String(row.name) === "scope_advice_json"))
+    await client.execute(
+      `ALTER TABLE planning_workflows ADD COLUMN scope_advice_json TEXT NOT NULL DEFAULT 'null'`,
+    );
+  const batchColumns = await client.execute(`PRAGMA table_info(generation_batches)`);
+  if (!batchColumns.rows.some((row) => String(row.name) === "awaiting_review"))
+    await client.execute(
+      `ALTER TABLE generation_batches ADD COLUMN awaiting_review INTEGER NOT NULL DEFAULT 0`,
+    );
+  const planningRunColumns = await client.execute(
+    `PRAGMA table_info(planning_runs)`,
+  );
+  if (!planningRunColumns.rows.some((row) => String(row.name) === "repair_response"))
+    await client.execute(
+      `ALTER TABLE planning_runs ADD COLUMN repair_response TEXT NOT NULL DEFAULT ''`,
+    );
+  const planningProposalColumns = await client.execute(
+    `PRAGMA table_info(planning_proposals)`,
+  );
+  if (!planningProposalColumns.rows.some((row) => String(row.name) === "target_ref"))
+    await client.execute(
+      `ALTER TABLE planning_proposals ADD COLUMN target_ref TEXT`,
+    );
+  for (const column of ["appearance", "outfit", "identity"]) {
+    const stateEvolution = await client.execute(`PRAGMA table_info(character_states)`);
+    if (!stateEvolution.rows.some((row) => String(row.name) === column))
+      await client.execute(
+        `ALTER TABLE character_states ADD COLUMN ${column} TEXT NOT NULL DEFAULT ''`,
+      );
+  }
 }

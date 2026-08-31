@@ -1,9 +1,16 @@
 import { z } from "zod";
 import type { Chapter, Novel } from "./novel";
-import type { BibleSection, StoryEntity } from "./story-bible";
+import { entityShortRef, type BibleSection, type StoryEntity } from "./story-bible";
 import { getTemplate, renderTemplate } from "./prompt-templates";
 import type { PromptTemplateOverrides } from "./prompt-templates";
 import type { NewPlanningProposal } from "./planning-proposal";
+import type { PlanningCycle } from "./planning-cycle";
+import type {
+  CharacterState,
+  ForeshadowThread,
+  TimelineEvent,
+} from "./continuity";
+import { selectCharacterStates } from "./context-pack";
 import {
   EMPTY_PLANNING_BRIEF,
   planningBriefText,
@@ -72,7 +79,7 @@ const structurePlan = z.object({
   proposals: z
     .array(
       z.object({
-        action: z.enum(["add", "update"]),
+        action: z.enum(["add", "update", "merge"]),
         targetType: z.enum([
           "character",
           "location",
@@ -80,6 +87,7 @@ const structurePlan = z.object({
           "item",
           "term",
         ]),
+        targetRef: z.string().optional(),
         targetName: z.string().min(1),
         patch: z.object({
           summary: z.string().optional(),
@@ -96,11 +104,14 @@ const castPlan = z.object({
   characters: z
     .array(
       z.object({
+        entityRef: z.string().optional(),
         name: z.string().min(1),
         summary: z.string().min(1),
         aliases: z.array(z.string()).default([]),
         tier: z.enum(["protagonist", "support", "recurring"]),
         profile,
+        /** 给作者读的详细人物小传；存进 profile.详细小传。 */
+        detailedBio: z.string().default(""),
       }),
     )
     .max(30),
@@ -110,6 +121,7 @@ const scenePlan = z.object({
   scenes: z
     .array(
       z.object({
+        entityRef: z.string().optional(),
         name: z.string().min(1),
         aliases: z.array(z.string()).default([]),
         summary: z.string().min(1),
@@ -125,6 +137,7 @@ const scenePlan = z.object({
     .array(
       z.object({
         type: z.enum(["organization", "item", "term"]),
+        entityRef: z.string().optional(),
         name: z.string().min(1),
         summary: z.string().min(1),
         aliases: z.array(z.string()).default([]),
@@ -153,8 +166,15 @@ export interface NovelPlanningPromptInput {
   entities: StoryEntity[];
   chapters?: Chapter[];
   range?: PlanRange;
+  rollingMemory?: RollingPlanningMemory;
   namePoolText: string;
   overrides?: PromptTemplateOverrides;
+}
+export interface RollingPlanningMemory {
+  cycles: PlanningCycle[];
+  characterStates: CharacterState[];
+  timeline: TimelineEvent[];
+  foreshadow: ForeshadowThread[];
 }
 export interface NovelPlanSummary {
   phase: PlanPhase;
@@ -163,6 +183,84 @@ export interface NovelPlanSummary {
   volumes: number;
   chapters: number;
   extras: number;
+}
+
+const clip = (value: string, length: number) =>
+  value.length > length ? `${value.slice(0, length - 1)}…` : value;
+
+/**
+ * 下一批策划只读取范围开始前已确认的动态正史。总长度硬限制 4000 字符，
+ * 优先保留上一周期收束和人物最新状态，再放开放伏笔与时间线尾部。
+ */
+export function rollingPlanningMemoryText(
+  memory: RollingPlanningMemory | undefined,
+  entities: StoryEntity[],
+  chapters: Chapter[],
+  range: PlanRange,
+): string {
+  if (!memory || range.startChapter <= 1)
+    return "（首个规划周期，没有上一批封存记忆）";
+  const previous = memory.cycles
+      .filter(
+        (item) =>
+          item.status === "completed" && item.endChapter < range.startChapter,
+      )
+      .sort((a, b) => b.endChapter - a.endChapter)[0],
+    positions = new Map(chapters.map((item) => [item.id, item.position])),
+    characterNames = new Map(entities.map((item) => [item.id, item.name])),
+    states = selectCharacterStates(
+      memory.characterStates,
+      positions,
+      range.startChapter,
+    )
+      .map((state) => {
+        const details = [
+          state.summary,
+          state.location && `位置：${state.location}`,
+          state.identity && `身份：${state.identity}`,
+          state.physical && `身体：${state.physical}`,
+          state.emotional && `情绪：${state.emotional}`,
+          state.goals.length && `目标：${state.goals.join("、")}`,
+          state.inventory.length && `持有：${state.inventory.join("、")}`,
+          state.skills.length && `技能：${state.skills.join("、")}`,
+        ].filter(Boolean);
+        return `- ${characterNames.get(state.characterId) ?? state.characterId}：${clip(details.join("；"), 320)}`;
+      })
+      .slice(0, 20),
+    beforeRange = (chapterId: string | null) =>
+      !chapterId || (positions.get(chapterId) ?? Number.POSITIVE_INFINITY) < range.startChapter,
+    openForeshadow = memory.foreshadow
+      .filter(
+        (item) =>
+          !["resolved", "abandoned"].includes(item.status) &&
+          beforeRange(item.setupChapterId),
+      )
+      .slice(0, 12)
+      .map(
+        (item) =>
+          `- ${item.title}（${item.status}）：${clip(item.detail, 180)}`,
+      ),
+    timelineTail = memory.timeline
+      .filter((item) => beforeRange(item.chapterId))
+      .sort((a, b) => {
+        const aPosition = a.chapterId ? (positions.get(a.chapterId) ?? 0) : 0,
+          bPosition = b.chapterId ? (positions.get(b.chapterId) ?? 0) : 0;
+        return aPosition - bPosition || a.updatedAt.localeCompare(b.updatedAt);
+      })
+      .slice(-12)
+      .map(
+        (item) =>
+          `- ${item.storyTime}｜${item.title}：${clip(item.detail, 180)}`,
+      ),
+    sections = [
+      previous
+        ? `【上一周期 第 ${previous.startChapter}–${previous.endChapter} 章】\n预期结束：${clip(previous.expectedClosingState || "未填写", 700)}\n实际结束（优先作为下一批起点）：${clip(previous.actualClosingState || "未填写", 1200)}`
+        : "【上一周期】没有找到已封存周期；只能使用下方动态正史。",
+      `【人物最新状态】\n${states.join("\n") || "无已确认人物状态"}`,
+      `【开放伏笔】\n${openForeshadow.join("\n") || "无开放伏笔"}`,
+      `【时间线尾部】\n${timelineTail.join("\n") || "无已确认时间线"}`,
+    ];
+  return clip(sections.join("\n\n"), 4000);
 }
 
 export function extractPlanningJson(raw: string): string {
@@ -309,6 +407,7 @@ export function rollingStructurePlanningPrompt(
   entities: StoryEntity[],
   chapters: Chapter[],
   range: PlanRange,
+  rollingMemory?: RollingPlanningMemory,
   overrides?: PromptTemplateOverrides,
 ): string {
   const digest = bible
@@ -317,8 +416,8 @@ export function rollingStructurePlanningPrompt(
       .slice(0, 6000),
     catalog = entities
       .map(
-        (item, index) =>
-          `${String(index + 1).padStart(2, "0")}. [${item.type}] ${item.name}${item.aliases.length ? `（${item.aliases.join("、")}）` : ""}：${item.summary}`,
+        (item) =>
+          `${entityShortRef(item)} [${item.type}] ${item.name}${item.aliases.length ? `（${item.aliases.join("、")}）` : ""}：${item.summary}`,
       )
       .join("\n")
       .slice(0, 8000),
@@ -345,6 +444,12 @@ export function rollingStructurePlanningPrompt(
       endChapter: range.endChapter,
       bible: digest || "（尚未生成故事圣经）",
       entities: catalog || "（尚无实体，请在 proposals 中补充必要内容）",
+      canonMemory: rollingPlanningMemoryText(
+        rollingMemory,
+        entities,
+        chapters,
+        range,
+      ),
       existingPlans: existing || "（当前范围尚未规划）",
     },
   ).text;
@@ -363,7 +468,7 @@ export function castPlanningPrompt(
   const existing = characters
     .map(
       (item) =>
-        `- ${item.name}${item.aliases.length ? `（别名：${item.aliases.join("、")}）` : ""}：${item.summary}`,
+        `- ${entityShortRef(item)}｜${item.name}${item.aliases.length ? `（别名：${item.aliases.join("、")}）` : ""}：${item.summary}`,
     )
     .join("\n");
   return renderTemplate(getTemplate("cast_planning", overrides), {
@@ -387,7 +492,7 @@ export function scenePlanningPrompt(
   const existing = locations
     .map(
       (item) =>
-        `- ${item.name}${item.aliases.length ? `（别名：${item.aliases.join("、")}）` : ""}：${item.summary}`,
+        `- ${entityShortRef(item)}｜${item.name}${item.aliases.length ? `（别名：${item.aliases.join("、")}）` : ""}：${item.summary}`,
     )
     .join("\n");
   return renderTemplate(getTemplate("scene_planning", overrides), {
@@ -407,6 +512,7 @@ export function novelPlanningPrompt(input: NovelPlanningPromptInput): string {
     entities,
     chapters = [],
     range,
+    rollingMemory,
     namePoolText,
     overrides,
   } =
@@ -421,6 +527,7 @@ export function novelPlanningPrompt(input: NovelPlanningPromptInput): string {
           entities,
           chapters,
           range,
+          rollingMemory,
           overrides,
         )
       : structurePlanningPrompt(novel, bible, overrides);
@@ -444,4 +551,19 @@ export function planningMaxOutputTokens(phase: PlanPhase): number {
   if (phase === "bible") return 8000;
   if (phase === "structure") return 12000;
   return 12000;
+}
+
+export function planningJsonRepairPrompt(input: {
+  phase: PlanPhase;
+  rawResponse: string;
+  parseError: string;
+}): string {
+  return [
+    "你是 JSON 修复器。只修复语法和结构，不改写、扩写或删减故事事实。",
+    `规划阶段：${input.phase}`,
+    `解析错误：${input.parseError}`,
+    "输出要求：只返回一个可解析的 JSON 对象，不要 Markdown 围栏，不要解释。",
+    "待修复原文：",
+    input.rawResponse,
+  ].join("\n");
 }

@@ -64,6 +64,9 @@ export function ContinuityPage(): React.JSX.Element {
       chapterId: null,
       summary: "",
       location: "",
+      appearance: "",
+      outfit: "",
+      identity: "",
       physical: "",
       emotional: "",
       knowledge: [],
@@ -503,6 +506,38 @@ export function ContinuityPage(): React.JSX.Element {
                   value={stateForm.physical}
                   onChange={(e) =>
                     setStateForm({ ...stateForm, physical: e.target.value })
+                  }
+                />
+              </label>
+              <div className="ledger-row">
+                <label>
+                  外貌变化
+                  <input
+                    placeholder="如：头发剪短、右臂受伤留疤"
+                    value={stateForm.appearance ?? ""}
+                    onChange={(e) =>
+                      setStateForm({ ...stateForm, appearance: e.target.value })
+                    }
+                  />
+                </label>
+                <label>
+                  当前衣着
+                  <input
+                    placeholder="如：黑色大衣、宴会礼服"
+                    value={stateForm.outfit ?? ""}
+                    onChange={(e) =>
+                      setStateForm({ ...stateForm, outfit: e.target.value })
+                    }
+                  />
+                </label>
+              </div>
+              <label>
+                身份变化
+                <input
+                  placeholder="如：获得“调查组顾问”头衔、使用假身份"
+                  value={stateForm.identity ?? ""}
+                  onChange={(e) =>
+                    setStateForm({ ...stateForm, identity: e.target.value })
                   }
                 />
               </label>

@@ -8,6 +8,7 @@ import {
   Circle,
   Feather,
   Layers,
+  Loader2,
   LockKeyhole,
   Map,
   Play,
@@ -18,7 +19,21 @@ import { Navigate, NavLink, useParams } from "react-router-dom";
 import type { PlanPhase } from "@domain/planning";
 import { composeClosingState, planningCycleRange } from "@domain/planning-cycle";
 import { CYCLE_SIZE_MAX, CYCLE_SIZE_MIN } from "@domain/novel";
-import { characterTierOf } from "@domain/story-bible";
+import {
+  characterTierOf,
+  CHARACTER_TIER_LABELS,
+} from "@domain/story-bible";
+import type { PlanningProposalStatus } from "@domain/planning-proposal";
+import type { PersonaSuggestion } from "@domain/persona-recommendation";
+import {
+  previousWorkflowPhase,
+  WORKFLOW_CHECKPOINT_LABELS,
+  WORKFLOW_MODE_LABELS,
+  WORKFLOW_PHASE_LABELS,
+  WORKFLOW_STATUS_LABELS,
+  type WorkflowMode,
+  type WorkflowPhase,
+} from "@domain/workflow-run";
 import {
   EMPTY_PLANNING_BRIEF,
   evaluatePlanningChecks,
@@ -28,6 +43,12 @@ import {
 } from "@domain/planning-workflow";
 import { useNovelStore } from "@renderer/store/novel-store";
 import "../planning-workflow.css";
+
+const PROPOSAL_STATUS_LABELS: Record<PlanningProposalStatus, string> = {
+  pending: "待审核",
+  accepted: "已接受",
+  rejected: "已拒绝",
+};
 
 function wizardSteps(cycleSize: number) {
   return [
@@ -70,6 +91,7 @@ const REVIEW_POINTS: Record<number, string[]> = {
     "检查重名与功能重复：两个角色干同一件事就删掉或合并一个。",
     "酱油人物看“出现条件”是否具体可执行。",
     "名称池风格应与题材一致，新角色起名会参照它查重。",
+    "人格批量确认后才会写入正式人物设定：主角/核心配角用完整人格模型，酱油只要简化标签。",
   ],
   6: [
     "每个场景 3–5 个视觉锚点，重复出场靠锚点保持一致。",
@@ -98,6 +120,32 @@ const REVIEW_POINTS: Record<number, string[]> = {
 };
 
 const EMPTY_LIST: never[] = [];
+
+/** 三档检查点的运行语义，与 AUTOPILOT_WORKFLOW.md 第 6 节保持一致。 */
+const WORKFLOW_MODE_OPTIONS: Array<{ value: WorkflowMode; caption: string }> = [
+  {
+    value: "checkpoint",
+    caption:
+      "圣经、人物、场景、卷章规划逐项生成后暂停，作者确认后续跑；正文按单章审批生成",
+  },
+  {
+    value: "chapter",
+    caption: "规划阶段连续推进；设定提案和每章候选稿仍暂停等待作者处理",
+  },
+  {
+    value: "autopilot",
+    caption: "当前批次候选稿连续生成，不自动接受、不写正史；设定提案仍需作者处理",
+  },
+];
+
+/** 规划阶段对应的向导步骤：阶段审核暂停时引导作者直达审核位置。 */
+const WORKFLOW_PHASE_STEPS: Record<WorkflowPhase, number> = {
+  bible: 3,
+  cast: 5,
+  scenes: 6,
+  structure: 7,
+  generation: 10,
+};
 
 export function PlanningWorkflowPage(): React.JSX.Element {
   const { novelId = "" } = useParams();
@@ -128,6 +176,9 @@ export function PlanningWorkflowPage(): React.JSX.Element {
   const planningProposals = useNovelStore(
     (state) => state.planningProposals[novelId] ?? EMPTY_LIST,
   );
+  const workflowRuns = useNovelStore(
+    (state) => state.workflowRuns[novelId] ?? EMPTY_LIST,
+  );
   const loadBible = useNovelStore((state) => state.loadBible);
   const loadEntities = useNovelStore((state) => state.loadEntities);
   const loadStructure = useNovelStore((state) => state.loadStructure);
@@ -140,6 +191,11 @@ export function PlanningWorkflowPage(): React.JSX.Element {
   const loadPlanningRuns = useNovelStore((state) => state.loadPlanningRuns);
   const loadPlanningProposals = useNovelStore(
     (state) => state.loadPlanningProposals,
+  );
+  const loadWorkflowRuns = useNovelStore((state) => state.loadWorkflowRuns);
+  const startWorkflowRun = useNovelStore((state) => state.startWorkflowRun);
+  const resumeStoredWorkflow = useNovelStore(
+    (state) => state.resumeWorkflowRun,
   );
   const reviewPlanningProposal = useNovelStore(
     (state) => state.reviewPlanningProposal,
@@ -171,13 +227,48 @@ export function PlanningWorkflowPage(): React.JSX.Element {
   const setPlanningMessage = useNovelStore(
     (state) => state.setPlanningMessage,
   );
+  const planEvents = useNovelStore(
+    (state) => state.activityEvents[`planning:${novelId}`] ?? [],
+  );
+  const loadActivity = useNovelStore((state) => state.loadActivity);
+  const ensureActivityListener = useNovelStore(
+    (state) => state.ensureActivityListener,
+  );
   const [activeStep, setActiveStep] = useState(1);
   const [brief, setBrief] = useState<PlanningBrief>(EMPTY_PLANNING_BRIEF);
   const [closingState, setClosingState] = useState("");
   const [cycleSizeInput, setCycleSizeInput] = useState(novel?.cycleSize ?? 10);
+  const [workflowMode, setWorkflowMode] = useState<WorkflowMode>("checkpoint");
+  const [workflowBusy, setWorkflowBusy] = useState(false);
+  const [aiElapsed, setAiElapsed] = useState(0);
+  const [reviewingProposal, setReviewingProposal] = useState("");
+  const aiBusy = briefDraftBusy || Boolean(busy);
+  useEffect(() => {
+    if (!aiBusy) {
+      setAiElapsed(0);
+      return;
+    }
+    const startedAt = Date.now();
+    const update = () => setAiElapsed(Math.floor((Date.now() - startedAt) / 1000));
+    update();
+    const timer = window.setInterval(update, 1000);
+    return () => window.clearInterval(timer);
+  }, [aiBusy]);
   useEffect(() => {
     setCycleSizeInput(novel?.cycleSize ?? 10);
   }, [novel?.cycleSize]);
+
+  // 规划生成期间的阶段事件流：Electron 走广播，Web 用轮询兜底。
+  useEffect(() => {
+    ensureActivityListener();
+    if (!aiBusy) return;
+    void loadActivity(`planning:${novelId}`);
+    const timer = window.setInterval(
+      () => void loadActivity(`planning:${novelId}`),
+      2000,
+    );
+    return () => window.clearInterval(timer);
+  }, [aiBusy, novelId]);
 
   async function saveCycleSize() {
     setPlanningMessage(novelId, "");
@@ -242,6 +333,7 @@ export function PlanningWorkflowPage(): React.JSX.Element {
       loadPlanningCycles(novelId),
       loadPlanningRuns(novelId),
       loadPlanningProposals(novelId),
+      loadWorkflowRuns(novelId),
       loadContinuity(novelId),
     ]);
   }, [
@@ -251,6 +343,7 @@ export function PlanningWorkflowPage(): React.JSX.Element {
     loadPlanningCycles,
     loadPlanningRuns,
     loadPlanningProposals,
+    loadWorkflowRuns,
     loadPlanningWorkflow,
     loadStructure,
     novelId,
@@ -274,6 +367,13 @@ export function PlanningWorkflowPage(): React.JSX.Element {
   const confirmed = workflow?.confirmedSteps ?? EMPTY_LIST;
 
   const characters = entities.filter((item) => item.type === "character");
+  const tieredCharacters = characters.filter((item) => {
+    const tier = characterTierOf(item);
+    return tier !== null && tier !== "extra";
+  });
+  const personasConfirmed =
+    tieredCharacters.length > 0 &&
+    tieredCharacters.every((item) => (item.profile["人格"] ?? "").trim());
   const locations = entities.filter((item) => item.type === "location");
   const organizations = entities.filter((item) => item.type === "organization");
   const items = entities.filter((item) => item.type === "item");
@@ -372,12 +472,42 @@ export function PlanningWorkflowPage(): React.JSX.Element {
   );
   const currentProposals = planningProposals.filter(
     (item) =>
-      item.startChapter === currentRange?.startChapter &&
-      item.endChapter === currentRange?.endChapter,
+      item.cycleId === "entity-merge" ||
+      (item.startChapter === currentRange?.startChapter &&
+        item.endChapter === currentRange?.endChapter),
   );
   const pendingProposals = currentProposals.filter(
     (item) => item.status === "pending",
   );
+  const latestWorkflowRun = workflowRuns[0];
+
+  async function runAutopilot(resume = false) {
+    if (!novel || !currentRange) return;
+    setPlanningMessage(novelId, "");
+    setWorkflowBusy(true);
+    try {
+      if (resume && latestWorkflowRun)
+        await resumeStoredWorkflow(latestWorkflowRun.id);
+      else
+        await startWorkflowRun(novel.id, workflowMode, {
+          startChapter: currentRange.startChapter,
+          endChapter: currentRange.endChapter,
+          chapterWords: novel.chapterWords,
+          continuityCheck: true,
+          maxRetries: 2,
+          approvalMode: "candidate",
+          outputTokenBudget:
+            (currentRange.endChapter - currentRange.startChapter + 1) * 6000,
+        });
+    } catch (error) {
+      setPlanningMessage(
+        novelId,
+        error instanceof Error ? error.message : "自动运行启动失败",
+      );
+    } finally {
+      setWorkflowBusy(false);
+    }
+  }
 
   async function confirmStep(step: PlanningReviewStep) {
     setPlanningMessage(novelId, "");
@@ -410,6 +540,7 @@ export function PlanningWorkflowPage(): React.JSX.Element {
 
   async function reviewProposal(id: string, accept: boolean) {
     setPlanningMessage(novelId, "");
+    setReviewingProposal(id);
     try {
       await reviewPlanningProposal(novelId, id, accept);
       setPlanningMessage(
@@ -421,6 +552,8 @@ export function PlanningWorkflowPage(): React.JSX.Element {
         novelId,
         error instanceof Error ? error.message : "提案审核失败",
       );
+    } finally {
+      setReviewingProposal("");
     }
   }
 
@@ -481,9 +614,11 @@ export function PlanningWorkflowPage(): React.JSX.Element {
         ? "请重点检查主角欲望、代价、对手关系和成长弧线。"
         : "还没有核心人物，请先回到上一步生成故事圣经。";
     if (activeStep === 5)
-      return fullCastReady
-        ? "人物已经分层，请检查重名、功能重复和人物关系。"
-        : "我会补齐核心配角、反派、酱油人物和龙套名称池。";
+      if (!fullCastReady)
+        return "我会补齐核心配角、反派、酱油人物和龙套名称池。";
+      return personasConfirmed
+        ? "人格阵容已批量确认。请最后检查重名、功能重复和人物关系。"
+        : "人物已经分层。接下来我会一次推荐整个阵容的人格，你逐个调整后批量确认。";
     if (activeStep === 6)
       return scenesReady
         ? "场景库已建立，请确认视觉锚点和叙事用途是否清晰。"
@@ -578,6 +713,21 @@ export function PlanningWorkflowPage(): React.JSX.Element {
 
           {activeStep === 1 && (
             <div className="workflow-card">
+              {workflow?.scopeAdvice && (
+                <details className="saved-scope-strategy" open>
+                  <summary>创建项目时保存的篇幅策略</summary>
+                  <div className="brief-facts">
+                    <span><b>{workflow.scopeAdvice.recommendation.totalChapters}</b>建议章节</span>
+                    <span><b>{workflow.scopeAdvice.recommendation.chapterWords}</b>单章字数</span>
+                    <span><b>{workflow.scopeAdvice.recommendation.estimatedDays}</b>预计天数</span>
+                  </div>
+                  <p>{workflow.scopeAdvice.recommendation.reason}</p>
+                  <small>
+                    {workflow.scopeAdvice.recommendation.tierLabel} · 日更 {workflow.scopeAdvice.recommendation.dailyChapters} 章 ·
+                    {workflow.scopeAdvice.volumeSkeleton.length} 卷 · {workflow.scopeAdvice.milestones.length} 个关键里程碑
+                  </small>
+                </details>
+              )}
               <div className="brief-draft-bar">
                 <button
                   className="secondary"
@@ -696,17 +846,20 @@ export function PlanningWorkflowPage(): React.JSX.Element {
           )}
 
           {activeStep === 5 && (
-            <StageCard
-              icon={Users}
-              count={`${characters.length} 名人物`}
-              ready={fullCastReady}
-              busy={busy === "cast"}
-              generateLabel="生成人物体系与名称池"
-              reviewLabel="审核人物分层"
-              reviewTo={`/novels/${novelId}/bible?mode=entities&type=character`}
-              onGenerate={() => void runPlan("cast")}
-              onConfirm={() => confirmStep(5)}
-            />
+            <>
+              <StageCard
+                icon={Users}
+                count={`${characters.length} 名人物`}
+                ready={fullCastReady && personasConfirmed}
+                busy={busy === "cast"}
+                generateLabel="生成人物体系与名称池"
+                reviewLabel="审核人物分层"
+                reviewTo={`/novels/${novelId}/bible?mode=entities&type=character`}
+                onGenerate={() => void runPlan("cast")}
+                onConfirm={() => confirmStep(5)}
+              />
+              <PersonaPanel novelId={novelId} confirmed={personasConfirmed} />
+            </>
           )}
 
           {activeStep === 6 && (
@@ -775,7 +928,14 @@ export function PlanningWorkflowPage(): React.JSX.Element {
                     最近生成记录 · {lastStructureRun.status} · 输入 {lastStructureRun.inputTokens} / 输出 {lastStructureRun.outputTokens} Token
                   </summary>
                   {lastStructureRun.error && <p className="error">{lastStructureRun.error}</p>}
+                  <p>原始响应</p>
                   <pre>{lastStructureRun.rawResponse || "模型尚未返回内容"}</pre>
+                  {lastStructureRun.repairResponse && (
+                    <>
+                      <p>低温修复响应</p>
+                      <pre>{lastStructureRun.repairResponse}</pre>
+                    </>
+                  )}
                 </details>
               )}
             </>
@@ -798,15 +958,30 @@ export function PlanningWorkflowPage(): React.JSX.Element {
                   {currentProposals.map((item) => (
                     <article key={item.id}>
                       <div>
-                        <b>{item.action === "add" ? "新增" : "更新"} · {item.targetName}</b>
-                        <span>{item.targetType} · {item.status}</span>
+                        <b>{item.action === "add" ? "新增" : item.action === "merge" ? "合并" : "更新"} · {item.targetName}</b>
+                        <span>{item.targetType} · {PROPOSAL_STATUS_LABELS[item.status]}</span>
                       </div>
                       <p>{item.reason}</p>
                       <pre>{JSON.stringify(item.patch, null, 2)}</pre>
                       {item.status === "pending" && (
                         <div className="workflow-actions">
-                          <button className="secondary" onClick={() => void reviewProposal(item.id, false)}>拒绝</button>
-                          <button className="primary" onClick={() => void reviewProposal(item.id, true)}>接受并写入设定</button>
+                          <button
+                            className="secondary"
+                            disabled={reviewingProposal === item.id}
+                            onClick={() => void reviewProposal(item.id, false)}
+                          >
+                            拒绝
+                          </button>
+                          <button
+                            className="primary"
+                            disabled={reviewingProposal === item.id}
+                            onClick={() => void reviewProposal(item.id, true)}
+                          >
+                            {reviewingProposal === item.id ? (
+                              <Loader2 size={15} className="workflow-busy-spin" />
+                            ) : null}
+                            {reviewingProposal === item.id ? "写入中…" : "接受并写入设定"}
+                          </button>
                         </div>
                       )}
                     </article>
@@ -840,7 +1015,127 @@ export function PlanningWorkflowPage(): React.JSX.Element {
           )}
 
           {activeStep === 10 && (
-            <div className="workflow-card workflow-finish">
+            <>
+              <div className="workflow-card autopilot-card">
+                <h3>Autopilot 自动运行</h3>
+                <p>
+                  选定检查点档位后，Amy 自动推进规划与当前批次正文。候选稿和设定提案
+                  仍受正史门禁约束，任何未审核内容都不会写入正史。
+                </p>
+                <div className="autopilot-modes">
+                  {WORKFLOW_MODE_OPTIONS.map((option) => (
+                    <button
+                      key={option.value}
+                      type="button"
+                      className={workflowMode === option.value ? "selected" : ""}
+                      disabled={workflowBusy}
+                      onClick={() => setWorkflowMode(option.value)}
+                    >
+                      <b>{WORKFLOW_MODE_LABELS[option.value]}</b>
+                      <small>{option.caption}</small>
+                    </button>
+                  ))}
+                </div>
+                {latestWorkflowRun && (
+                  <div
+                    className="autopilot-run"
+                    data-status={latestWorkflowRun.status}
+                  >
+                    <header>
+                      <b>
+                        {WORKFLOW_MODE_LABELS[latestWorkflowRun.mode]} ·{" "}
+                        {WORKFLOW_PHASE_LABELS[latestWorkflowRun.currentPhase]}
+                      </b>
+                      <span>
+                        {WORKFLOW_STATUS_LABELS[latestWorkflowRun.status]}
+                      </span>
+                    </header>
+                    {latestWorkflowRun.checkpoint && (
+                      <p>
+                        等待{WORKFLOW_CHECKPOINT_LABELS[latestWorkflowRun.checkpoint]}
+                        ，处理后点“继续运行”。
+                      </p>
+                    )}
+                    {latestWorkflowRun.error && (
+                      <p className="error">{latestWorkflowRun.error}</p>
+                    )}
+                    <small>
+                      启动于{" "}
+                      {new Date(latestWorkflowRun.createdAt).toLocaleString()}
+                      {latestWorkflowRun.batchId
+                        ? ` · 批次 ${latestWorkflowRun.batchId}`
+                        : ""}
+                    </small>
+                  </div>
+                )}
+                <div className="workflow-actions autopilot-actions">
+                  {latestWorkflowRun?.status === "running" || workflowBusy ? (
+                    <span className="autopilot-state">
+                      <Loader2 size={15} className="workflow-busy-spin" />
+                      {latestWorkflowRun
+                        ? `Amy 正在推进：${WORKFLOW_PHASE_LABELS[latestWorkflowRun.currentPhase]}`
+                        : "正在启动…"}
+                    </span>
+                  ) : latestWorkflowRun &&
+                    (latestWorkflowRun.status === "paused" ||
+                      latestWorkflowRun.status === "failed") ? (
+                    <button
+                      className="primary"
+                      disabled={workflowBusy}
+                      onClick={() => void runAutopilot(true)}
+                    >
+                      {workflowBusy ? (
+                        <Loader2 size={15} className="workflow-busy-spin" />
+                      ) : (
+                        <Play size={15} />
+                      )}
+                      {latestWorkflowRun.status === "failed"
+                        ? "重试运行"
+                        : "继续运行"}
+                    </button>
+                  ) : (
+                    <button
+                      className="primary"
+                      disabled={workflowBusy || !currentRange}
+                      onClick={() => void runAutopilot(false)}
+                    >
+                      <Play size={15} /> 启动自动运行
+                    </button>
+                  )}
+                  {latestWorkflowRun?.checkpoint === "phase_review" && (
+                    <button
+                      className="secondary"
+                      onClick={() =>
+                        setActiveStep(
+                          WORKFLOW_PHASE_STEPS[
+                            previousWorkflowPhase(latestWorkflowRun!.currentPhase)
+                          ] ?? 3,
+                        )
+                      }
+                    >
+                      查看待审核步骤
+                    </button>
+                  )}
+                  {latestWorkflowRun?.checkpoint === "proposal_review" && (
+                    <button
+                      className="secondary"
+                      onClick={() => setActiveStep(8)}
+                    >
+                      去第 8 步审核提案
+                    </button>
+                  )}
+                  {(latestWorkflowRun?.checkpoint === "chapter_review" ||
+                    latestWorkflowRun?.currentPhase === "generation") && (
+                    <NavLink
+                      className="secondary"
+                      to={`/novels/${novelId}/generate`}
+                    >
+                      生成工作台
+                    </NavLink>
+                  )}
+                </div>
+              </div>
+              <div className="workflow-card workflow-finish">
               <div className="finish-icon"><CheckCircle2 size={36} /></div>
               <h3>小说框架已准备完成</h3>
               <p>
@@ -879,13 +1174,172 @@ export function PlanningWorkflowPage(): React.JSX.Element {
                   </div>
                 </>
               )}
-            </div>
+              </div>
+            </>
           )}
 
           {message && <div className="model-result">{message}</div>}
         </section>
       </div>
+      {aiBusy && (
+        <div className="scope-busy-backdrop" role="dialog" aria-modal="true" aria-label="Amy 正在生成规划内容">
+          <div className="scope-busy-card">
+            <span className="scope-busy-spinner" aria-hidden="true" />
+            <h2>{briefDraftBusy ? "Amy 正在起草创作简报" : "Amy 正在生成规划内容"}</h2>
+            <p>
+              {briefDraftBusy
+                ? "正在整理目标读者、文风边界、核心卖点与主线冲突。"
+                : "正在读取本项目设定并生成结构化结果，完成后会自动保存到当前小说。"}
+            </p>
+            {planEvents.length > 0 && (
+              <ul className="plan-busy-events">
+                {planEvents.slice(-5).map((event) => (
+                  <li key={event.id} data-level={event.level}>
+                    {event.message}
+                  </li>
+                ))}
+              </ul>
+            )}
+            <strong>已用时 {aiElapsed} 秒</strong>
+            <small>简报最长等待 120 秒，后续大型规划最长等待 300 秒。完成前页面暂时锁定。</small>
+          </div>
+        </div>
+      )}
     </main>
+  );
+}
+
+function PersonaPanel({
+  novelId,
+  confirmed,
+}: {
+  novelId: string;
+  confirmed: boolean;
+}) {
+  const store = useNovelStore(),
+    drafts = useNovelStore((s) => s.personaDrafts[novelId] ?? []),
+    busy = useNovelStore((s) => s.personaBusy[novelId] ?? false),
+    message = useNovelStore((s) => s.personaMessage[novelId] ?? ""),
+    [confirming, setConfirming] = useState(false),
+    [result, setResult] = useState("");
+  async function suggest() {
+    setResult("");
+    const suggestions = await store.suggestPersonas(novelId);
+    if (suggestions)
+      setResult(
+        `Amy 已为 ${suggestions.length} 名人物推荐人格，请逐个调整后批量确认。`,
+      );
+  }
+  async function confirm() {
+    setConfirming(true);
+    setResult("");
+    try {
+      const written = await store.confirmPersonas(novelId, drafts);
+      setResult(
+        written
+          ? `已批量确认 ${written} 名人物的人格并写入正式设定。`
+          : "没有可写入的人物，请先生成人物体系。",
+      );
+    } catch (error) {
+      setResult(error instanceof Error ? error.message : "批量确认失败");
+    } finally {
+      setConfirming(false);
+    }
+  }
+  function patch(name: string, key: keyof PersonaSuggestion, value: string) {
+    store.updatePersonaDraft(novelId, name, { [key]: value });
+  }
+  return (
+    <div className="workflow-card persona-panel">
+      <h3>人格阵容 · 批量确认</h3>
+      <p>
+        Amy 一次推荐整个人物阵容的人格与写作行为约束；主角和核心配角用完整人格模型，
+        常驻酱油人物只要简化性格标签，跑龙套不推荐。你逐个调整后点“批量确认”，
+        确认前不会写入正式人物设定。
+      </p>
+      {message && <div className="error">{message}</div>}
+      {result && <div className="persona-result">{result}</div>}
+      {confirmed && !drafts.length ? (
+        <div className="persona-confirmed">
+          <CheckCircle2 size={16} /> 人物阵容人格已确认，将参与正文生成与一致性检查。
+        </div>
+      ) : (
+        <div className="workflow-actions">
+          <button
+            className="secondary"
+            disabled={busy}
+            onClick={() => void suggest()}
+          >
+            <Sparkles size={15} />
+            {busy ? "Amy 正在推荐…" : drafts.length ? "重新推荐人格阵容" : "让 Amy 推荐人格阵容"}
+          </button>
+          {drafts.length > 0 && (
+            <button
+              className="primary"
+              disabled={confirming || busy}
+              onClick={() => void confirm()}
+            >
+              {confirming ? (
+                <Loader2 size={15} className="workflow-busy-spin" />
+              ) : (
+                <Check size={15} />
+              )}
+              {confirming ? "写入中…" : `批量确认人物阵容（${drafts.length} 名）`}
+            </button>
+          )}
+        </div>
+      )}
+      {drafts.length > 0 && (
+        <div className="persona-list">
+          {drafts.map((item) => (
+            <article key={item.entityName}>
+              <header>
+                <b>{item.entityName}</b>
+                <span>
+                  {CHARACTER_TIER_LABELS[item.tier]}
+                  {item.tier === "recurring" ? " · 简化标签" : " · 完整人格"}
+                </span>
+              </header>
+              <label>
+                {item.tier === "recurring" ? "性格标签" : "人格类型"}
+                <input
+                  value={item.personaType}
+                  onChange={(event) =>
+                    patch(item.entityName, "personaType", event.target.value)
+                  }
+                />
+              </label>
+              {item.reason && <small>推荐理由：{item.reason}</small>}
+              <label>
+                写作行为约束
+                <textarea
+                  rows={2}
+                  value={item.writingConstraints}
+                  onChange={(event) =>
+                    patch(
+                      item.entityName,
+                      "writingConstraints",
+                      event.target.value,
+                    )
+                  }
+                />
+              </label>
+              {item.tier !== "recurring" && (
+                <label>
+                  语言习惯
+                  <input
+                    value={item.speechHabit}
+                    onChange={(event) =>
+                      patch(item.entityName, "speechHabit", event.target.value)
+                    }
+                  />
+                </label>
+              )}
+            </article>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 
