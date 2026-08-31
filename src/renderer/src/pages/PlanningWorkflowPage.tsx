@@ -1209,7 +1209,7 @@ export function PlanningWorkflowPage(): React.JSX.Element {
   );
 }
 
-function PersonaPanel({
+export function PersonaPanel({
   novelId,
   confirmed,
 }: {
@@ -1217,7 +1217,7 @@ function PersonaPanel({
   confirmed: boolean;
 }) {
   const store = useNovelStore(),
-    drafts = useNovelStore((s) => s.personaDrafts[novelId] ?? []),
+    drafts = useNovelStore((s) => s.personaDrafts[novelId]) ?? EMPTY_LIST,
     busy = useNovelStore((s) => s.personaBusy[novelId] ?? false),
     message = useNovelStore((s) => s.personaMessage[novelId] ?? ""),
     [confirming, setConfirming] = useState(false),

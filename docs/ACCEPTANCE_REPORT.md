@@ -375,3 +375,30 @@ characterState.chapterId 可空等），避免过度限制正常调用。
 导航前缀与逃逸、新窗口决策、双端 CSP 差异共 9 项通过；`pnpm verify` 通过
 （30 个测试文件、141 项测试，双端生产构建）。开发模式 HMR 的 CSP 实机表现待下次
 `pnpm dev` 冒烟确认。
+
+## 2026-08-31 AN-010 Renderer 关键流程测试 与 AN-024 人物阵容收尾
+
+**AN-010**：新增 Renderer 测试基建（vitest `@renderer` 别名、`.tsx` 用例支持、
+@testing-library/react），`tests/web/novel-store-flows.test.ts` 以真实 zustand
+store + 可推进的模拟平台覆盖三条发布关键链路：规划门禁（跳步确认被域规则直接拒绝
+"请先确认第 8 步"，第 9 步未确认时创建正文批次被数据层拒绝；按序确认 1–9 后放行）、
+候选接受与事实审核（候选稿未接受时 `reviewFactProposal` 被
+`assertCandidateAcceptedForCanon` 拒绝且不产生任何正史写入；接受后伏笔以
+ai_candidate 来源写入并同步状态）、生成中切页恢复（批次由模拟主进程后台推进，
+页面重新挂载只做 loadBatches/loadJobs 即恢复 running 与 awaitingReview 状态；
+全部事实提案处理后任务与批次按 AN-003 门禁收敛为完成）。
+
+测试首跑即暴露一个真实隐患：PersonaPanel 的 zustand selector 写作
+`?? []` 每次返回新数组引用，`useSyncExternalStore` 快照不稳定可触发无限重渲
+（页面主体均用稳定 EMPTY_LIST 常量，该后写组件不一致）。已修复为快照外兜底，
+UI 测试同时锁定该写法。
+
+**AN-024**：`tests/web/web-advisory-chain.test.ts` 用真实 webPlatform（IndexedDB +
+sessionStorage 密钥）+ stub fetch 走通人物阵容建议全链路：别名命中主角卡、
+extra 与未知人物被过滤、请求载荷与会话密钥正确、非 200 错误可读不静默；
+`tests/web/persona-panel.test.tsx` 以真实组件 + 真实 store 完成"推荐 → 调整 →
+批量确认"的 UI 回归，断言人格/写作约束/语言习惯以 ai 建议字段写入正式人物设定。
+Electron 端同一链路经 IPC 镜像 novel-ipc 处理器，解析与过滤规则由共享 Domain
+承担（域测试覆盖），端口 DTO 由 AN-011 契约套件约束。
+
+`pnpm verify` 通过：31 个测试文件、147 项测试通过，双端生产构建。

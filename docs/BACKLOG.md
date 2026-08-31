@@ -5,14 +5,12 @@
 
 ## 当前结论
 
-2026-08-31：可靠性前置项 AN-001～AN-005、文风模板 AN-020 与 Workflow Runner（AN-022）
-均已完成，AN-006 把 Web 端作品数据迁移到 IndexedDB 后，P0 数据正确性全部收口。
-AN-022 复用现有规划器和 BatchRunner，三档检查点、持久化恢复和失败重入已由
-自动化测试覆盖，并经真实模型 autopilot 全流程评估验证（见 `ACCEPTANCE_REPORT.md`）；
-运行语义记录在 `AUTOPILOT_WORKFLOW.md` 6.1 节。
-当前工作区还包含篇幅顾问、简报起草、人物阵容建议、单章审批、补写、事件日志和过期候选
-提示等能力；`pnpm verify` 验证记录见 `ACCEPTANCE_REPORT.md`，尚未发布。评估发现的
-“候选已生成但事实提案为 0 无提示”问题与 AN-023 审查重写闭环留待后续任务。
+2026-08-31：P0 全部收口；P1 中 AN-010 Renderer 流程测试、AN-011 双端契约、
+AN-012 安全加固已完成，发布阻塞项只剩发布工程（版本号、发布说明、安装包冒烟）
+与 AN-015 签名决策。AN-013（前端拆包）、AN-014（CI）不阻塞发布，留待 v1 后。
+真实模型 autopilot 评估已通过（`ACCEPTANCE_REPORT.md`）；运行语义见
+`AUTOPILOT_WORKFLOW.md` 6.1 节。评估发现的“候选已生成但事实提案为 0 无提示”
+问题与 AN-021 版本化记忆、AN-023 审查重写留待 v1 后迭代。
 
 ## P0：数据正确性与连续性
 
@@ -29,7 +27,7 @@ AN-022 复用现有规划器和 BatchRunner，三档检查点、持久化恢复�
 
 | ID | 状态 | 事项 | 当前证据 | 完成验收 |
 | --- | --- | --- | --- | --- |
-| AN-010 | [ ] | Renderer 关键流程测试 | 当前没有 Renderer 测试目录；规划向导、候选审核和跨页状态主要靠人工回归 | 至少覆盖规划门禁、候选接受/事实审核、生成中切页恢复三个流程 |
+| AN-010 | [x] | Renderer 关键流程测试 | `tests/web/novel-store-flows.test.ts`（jsdom + 模拟平台）覆盖：规划门禁（跳步确认被拒、第 9 步未确认拒绝建批）；候选接受与事实审核（未接受候选稿时提案写入被正史门禁拒绝，接受后伏笔以 ai_candidate 来源写入）；生成中切页恢复（后台推进后仅靠 loadBatches/loadJobs 恢复运行与待审状态，全部提案处理后批次收敛完成） | 三流程测试通过，顺带暴露并修复 PersonaPanel selector 不稳定引用的无限重渲隐患；`pnpm verify` 通过（147 项测试） |
 | AN-011 | [x] | PlatformPort 双端契约测试 | `tests/contract/platform-port.contract.ts` 同一组 7 项用例分别驱动 Electron（NovelDatabase，经 novel-ipc 同款方法映射）与 Web（webPlatform + IndexedDB）：ready 门、cycleSize 归一化、CJK 字数与版本快照、第 9 步门禁错误语义、workflow run DTO、文风模板、项目包导入与短引用重映射 | 双端 14 项契约用例通过（并验证孤儿提案按 cycleId 过滤的规则两端一致）；`pnpm verify` 通过（132 项测试） |
 | AN-012 | [x] | IPC 运行时校验和 Electron 导航安全 | `registerNovelIpc` 入口统一包裹写通道守卫表（ipc-guard 组合子 + ipc-write-guards，约 50 个写通道含付费生成调用）；`window-security.ts` 纯函数策略接入 will-navigate / setWindowOpenHandler（外链转系统浏览器）；双端入口 html 配置差异化 CSP（Electron 渲染层零网络，Web 放开模型端点） | 守卫表完整性、类型攻击拒绝、导航前缀逃逸、新窗口决策与双端 CSP 断言共 9 项测试通过；`pnpm verify` 通过且双端构建产物含 CSP |
 | AN-013 | [ ] | 拆分前端热点文件并按路由懒加载 | `web-platform.ts`、`novel-store.ts`、`PlanningWorkflowPage.tsx` 均超过 1,200 行；页面静态导入；Web 主包约 537KB | 先按现有业务边界拆分；路由懒加载；构建无 500KB 主包警告；行为测试不退化 |
@@ -44,7 +42,7 @@ AN-022 复用现有规划器和 BatchRunner，三档检查点、持久化恢复�
 | AN-021 | [~] | 版本化记忆 | 人物状态、技能、过期候选识别已有基础；章节摘要、通用实体状态、关系版本和完整失效传播未完成。2026-08-31 真实评估发现：第 4–5 章事实提取静默产出 0 条提案，候选审核界面无任何提示，接受后将得不到记忆回写 | 改写章节后所有派生记忆与后续候选可追踪失效；项目包保留版本链；候选的事实提案为 0 时界面有可见警示 |
 | AN-022 | [x] | Autopilot Workflow Runner | `workflow_runs` 表与 `run-workflow.ts` 编排已落地，复用现有规划器和 BatchRunner；三档检查点（阶段/提案/章节审核）、批次事件驱动的状态收敛、失败重试与断点恢复、规划页运行台均已实现，运行语义见 `AUTOPILOT_WORKFLOW.md` 6.1 | 三档模式暂停点、提案门禁、重试耗尽、失败恢复重置预算、双端批次收敛差异的编排测试与 SQLite 持久化用例通过；`pnpm verify` 通过（115 项测试，双端生产构建）；真实模型 autopilot 全流程评估通过（两轮驱动、候选不入正史、预算 4.7k/80k），记录见 `ACCEPTANCE_REPORT.md` 2026-08-31 |
 | AN-023 | [ ] | 审查驱动重写与可选自动采纳 | 尚无自动重写闭环；默认不得自动写正史 | error 反馈最多 N 次；默认关闭自动采纳；启用时满足质量门槛并保留回滚版本 |
-| AN-024 | [~] | 人物阵容建议与运行日志 | 当前工作区已有实现和域测试，尚缺页面/双端契约验收记录 | `pnpm verify`、关键 UI 回归和双端契约通过后转完成 |
+| AN-024 | [x] | 人物阵容建议与运行日志 | 域测试覆盖解析与过滤；`tests/web/web-advisory-chain.test.ts` 走真实 webPlatform + stub fetch 全链路（别名命中、extra/未知人物过滤、请求载荷与会话密钥、非 200 错误可读）；`tests/web/persona-panel.test.tsx` 覆盖推荐→调整→批量确认写入正式设定的 UI 回归 | `pnpm verify`、关键 UI 回归与双端契约（AN-011 契约套件 + 共享解析域测试）通过 |
 
 ## 已完成基础能力
 
