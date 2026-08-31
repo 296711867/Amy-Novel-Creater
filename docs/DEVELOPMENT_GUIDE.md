@@ -48,6 +48,11 @@
 | 文档、样式、纯文案 | 链接/路径人工检查；相关页面构建 |
 | Domain 规则、解析器、状态机 | 对应 Vitest + `pnpm check` |
 | PlatformPort、IPC、Preload、Web 适配 | 双端类型检查 + 契约测试 + `pnpm verify` |
+
+契约测试位于 `tests/contract/platform-port.contract.ts`：同一组用例经
+`tests/contract/electron-port.test.ts`（NovelDatabase）与
+`tests/web/web-platform-contract.test.ts`（webPlatform）双端运行。新增或修改
+端口方法时，把 DTO 形状、归一化规则和错误语义补进共享套件，两端一起验证。
 | 数据库 Schema/迁移/导入导出 | 新旧库迁移测试 + 数据库测试 + 项目包往返 |
 | 生成、预算、重试、正史门禁 | 域测试 + BatchRunner/适配器集成测试 |
 | Windows 安装发布 | `pnpm verify` + 隔离 Profile 安装/启动/卸载冒烟 |

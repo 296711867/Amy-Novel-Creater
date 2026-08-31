@@ -334,3 +334,19 @@ findings/proposals 键扫描改为经存储层删除/枚举，不再直接触碰
 与删除作品后的存储清理。工程侧新增 `tests/web/` 归属 web typecheck 工程（渲染层
 测试不再拉入 node 工程，避免 `window` 全局声明失效）。`pnpm verify` 通过：
 27 个测试文件、118 项测试通过，双端生产构建通过。
+
+## 2026-08-31 AN-011 PlatformPort 双端契约测试
+
+新增 `tests/contract/platform-port.contract.ts` 共享契约套件：同一组 7 项用例分别经
+`tests/contract/electron-port.test.ts`（NovelDatabase 内存库，方法映射与 novel-ipc
+一致）和 `tests/web/web-platform-contract.test.ts`（webPlatform + IndexedDB，
+jsdom + fake-indexeddb）运行。覆盖：`ready()` 就绪门、小说创建/章节骨架/cycleSize
+上限归一化、章节保存 CJK 字数与不可变版本快照、第 9 步未确认时创建正文批次的
+错误文案、workflow run 创建/部分更新/列表 DTO、文风模板保存与列表、项目包导入的
+恢复标题/章节/版本/工作流与实体短引用按新 ID 重映射。
+
+套件首轮即发现并澄清两处边界：`getStyleTemplate` 只存在于数据库层、不属于端口
+契约（测试面已对齐端口定义）；项目包中 cycleId 不存在于包内周期的提案会被过滤，
+该规则两端一致执行。双端 14 项契约用例通过；`pnpm verify` 通过：29 个测试文件、
+132 项测试通过，双端生产构建通过。契约套件位置与维护规则已写入
+`DEVELOPMENT_GUIDE.md`。
