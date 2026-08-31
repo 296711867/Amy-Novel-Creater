@@ -1,6 +1,6 @@
 {
   "name": "amy-novel",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "Amy Novel - local-first AI long-form fiction studio",
   "main": "./out/main/index.js",
   "author": "PAN",

@@ -402,3 +402,20 @@ Electron 端同一链路经 IPC 镜像 novel-ipc 处理器，解析与过滤规�
 承担（域测试覆盖），端口 DTO 由 AN-011 契约套件约束。
 
 `pnpm verify` 通过：31 个测试文件、147 项测试通过，双端生产构建。
+
+## 2026-08-31 v1.0.0 发布工程
+
+版本升至 1.0.0（package.json 与 Web 诊断 appVersion 同步），`docs/RELEASE.md`
+新增 v1.0.0 版本记录。`pnpm verify` 通过后执行 `pnpm build:win`，产出
+`release/Amy-Novel-1.0.0-Setup-x64.exe`（101 MB，NSIS，per-user 安装）。
+
+隔离环境安装/启动/卸载冒烟（临时目录安装，不触碰既有安装）：
+
+- 静默安装 `/S /D=<临时目录>` 退出码 0，`Amy Novel.exe` 与卸载器就位；
+- 启动安装版应用，主/渲染进程运行，用户数据目录生成且 `amy-novel.db` 初始化
+  （应用完成启动、数据库与 IPC 就绪的证据）；
+- 结束进程后静默卸载退出码 0，安装目录清除；
+- 按设计卸载保留用户数据（`deleteAppDataOnUninstall: false`），数据库文件仍在。
+
+发布边界：安装包未签名（SmartScreen 提示）、无自动更新（AN-015 待证书与发布渠道）；
+gh CLI 不可用，安装包未附到 GitHub Release 附件，需要时经网页端手动上传。

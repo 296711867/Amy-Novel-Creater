@@ -376,7 +376,7 @@ export const webPlatform: PlatformPort = {
   async getDiagnostics() {
     return {
       generatedAt: new Date().toISOString(),
-      appVersion: "0.1.0-web",
+      appVersion: "1.0.0-web",
       host: "web",
       platform: navigator.platform,
       runtime: { browser: navigator.userAgent },
