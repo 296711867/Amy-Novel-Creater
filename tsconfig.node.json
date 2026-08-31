@@ -1,13 +1,32 @@
 {
   "extends": "@electron-toolkit/tsconfig/tsconfig.node.json",
-  "include": ["electron.vite.config.ts", "vite.web.config.ts", "vitest.config.ts", "src/main/**/*", "src/preload/**/*", "src/shared/**/*", "src/domain/**/*", "src/application/**/*", "tests/**/*"],
+  "include": [
+    "electron.vite.config.ts",
+    "vite.web.config.ts",
+    "vitest.config.ts",
+    "src/main/**/*",
+    "src/preload/**/*",
+    "src/shared/**/*",
+    "src/domain/**/*",
+    "src/application/**/*",
+    "tests/**/*"
+  ],
   "compilerOptions": {
     "composite": true,
     "baseUrl": ".",
     "paths": {
-      "@domain/*": ["src/domain/*"],
-      "@application/*": ["src/application/*"],
-      "@shared/*": ["src/shared/*"]
+      "@domain/*": [
+        "src/domain/*"
+      ],
+      "@application/*": [
+        "src/application/*"
+      ],
+      "@shared/*": [
+        "src/shared/*"
+      ]
     }
-  }
+  },
+  "exclude": [
+    "tests/web/**/*"
+  ]
 }

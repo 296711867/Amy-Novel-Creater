@@ -35,9 +35,10 @@
 
 ### Web
 
-- 当前 Web 是本机浏览器预览模式，`web-platform.ts` 使用 localStorage；它不适合长期保存
-  大量正文、候选稿和版本。正式长篇 Web 数据迁移到 IndexedDB 的任务见 `BACKLOG.md`
-  AN-006。
+- 本机浏览器预览模式的 `web-platform.ts` 数据落 IndexedDB（AN-006）：键值经
+  `web-storage.ts` 的内存镜像同步读写，写穿队列持久化；启动时旧 localStorage
+  数据一次性迁入并清源，localStorage 只保留迁移标记。首屏读取前由
+  `PlatformPort.ready()` 等待装载与迁移完成（Electron 端立即返回）。
 - 正式部署时增加 `WebApiPlatformAdapter`，调用独立 Node 服务。
 - Web 服务实现同一组 Application Ports；React 页面不做条件分支。
 - 浏览器不能安全长期保存第三方 API Key，正式部署必须由服务端密钥库管理。

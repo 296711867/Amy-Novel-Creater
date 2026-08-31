@@ -50,6 +50,8 @@ import type {
 
 const api: AmyNovelApi = {
   host: "electron",
+  /** Electron 主进程 SQLite 随 IPC 就绪，无需等待。 */
+  ready: () => Promise.resolve(),
   getDiagnostics: () => ipcRenderer.invoke(IPC_CHANNELS.getDiagnostics),
   suggestNovelScope: (input: {
     title: string;

@@ -491,6 +491,8 @@ export const useNovelStore = create<NovelState>((set, get) => ({
   loading: false,
   initialized: false,
   async loadNovels() {
+    // Web 端首屏读取前必须等 IndexedDB 装载/迁移完成（Electron 端立即返回）。
+    await platform.ready();
     set({ loading: true });
     try {
       set({ novels: await platform.listNovels() });

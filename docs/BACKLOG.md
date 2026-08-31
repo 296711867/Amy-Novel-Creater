@@ -6,7 +6,8 @@
 ## 当前结论
 
 2026-08-31：可靠性前置项 AN-001～AN-005、文风模板 AN-020 与 Workflow Runner（AN-022）
-均已完成。AN-022 复用现有规划器和 BatchRunner，三档检查点、持久化恢复和失败重入已由
+均已完成，AN-006 把 Web 端作品数据迁移到 IndexedDB 后，P0 数据正确性全部收口。
+AN-022 复用现有规划器和 BatchRunner，三档检查点、持久化恢复和失败重入已由
 自动化测试覆盖，并经真实模型 autopilot 全流程评估验证（见 `ACCEPTANCE_REPORT.md`）；
 运行语义记录在 `AUTOPILOT_WORKFLOW.md` 6.1 节。
 当前工作区还包含篇幅顾问、简报起草、人物阵容建议、单章审批、补写、事件日志和过期候选
@@ -22,7 +23,7 @@
 | AN-003 | [x] | 单章审批与记忆审核硬门禁 | Electron/Web 接受候选后仅写入正史；该候选的事实提案全部接受/拒绝后，`candidate_ready` 才转为 `completed`；周期封存会汇总范围内已接受候选并拒绝任何待处理提案 | 共享 Domain 门禁测试与 SQLite 周期封存集成用例通过；`pnpm verify` 通过（96 项测试，双端生产构建） |
 | AN-004 | [x] | 低温 JSON 修复一次 | Electron/Web 在规划 JSON/Schema 解析失败时以 0.1 温度修复一次；业务完整性错误不触发；`planning_runs` 分别保存原始与修复响应并累计 Token，旧库和旧项目包兼容 | 修复成功与二次失败测试、SQLite 留痕测试通过；`pnpm verify` 通过（98 项测试，双端生产构建） |
 | AN-005 | [x] | 实体短引用、跨阶段合并与周期去重 | 规划 Prompt 用实体 ID 派生的稳定短引用；明确引用或名称/别名完全匹配才更新；限定名同核心称呼生成全局合并提案，不静默合并或建双卡；已接受/待审新增提案跨周期去重 | Domain、Application、SQLite、项目导入短引用重映射测试通过；`pnpm verify` 通过（102 项测试，双端生产构建） |
-| AN-006 | [ ] | Web 长篇存储迁移到 IndexedDB | 正文、候选、版本和事件仍由 `web-platform.ts` 整块写入 localStorage | 旧数据自动迁移；大文本不再进入 localStorage；容量/恢复/项目包往返测试通过 |
+| AN-006 | [x] | Web 长篇存储迁移到 IndexedDB | `web-storage.ts` 以内存镜像保持原同步 read/write 接口，全部 `amy-novel:` 键落 IndexedDB；启动一次性迁入旧 localStorage 数据并清源；首屏读取前经 `PlatformPort.ready()` 等待装载 | jsdom + fake-indexeddb 测试覆盖迁移清源、60 章×3200 字重载恢复且 localStorage 无数据键、项目包导入往返与删除清理；`pnpm verify` 通过 |
 
 ## P1：可维护性、测试与发布安全
 

@@ -61,15 +61,18 @@ pnpm verify      # check + Web 构建 + Electron 构建
 pnpm build:win   # Windows 安装包；仅发布阶段
 ```
 
-`tsconfig.node.json` 的 typecheck 范围包含 `tests/`：测试文件的导入、fixture 字段与
-空值收窄按产品代码同标准检查。新增测试必须通过 typecheck 才算完成，不允许只靠
-Vitest 运行时兜底（错误导入只有运行时才暴露，曾造成真实 API 调用浪费）。
+`tsconfig.node.json` 与 `tsconfig.web.json` 的 typecheck 范围都包含各自对应的
+`tests/` 目录（域/应用/主进程测试归 node 工程，`tests/web/` 归 web 工程）：测试
+文件的导入、fixture 字段与空值收窄按产品代码同标准检查。新增测试必须通过
+typecheck 才算完成，不允许只靠 Vitest 运行时兜底（错误导入只有运行时才暴露，
+曾造成真实 API 调用浪费）。
 
 ## 5. 数据与安全规范
 
 - SQLite 迁移只追加，不重写已发布迁移语义；写入使用显式列名。
 - 导出包变更必须兼容旧版本，新增字段提供默认值并做往返测试。
-- Web 长篇数据不得继续扩展 `localStorage` 使用；新增大文本或历史版本必须进入 IndexedDB。
+- Web 端作品数据一律经 `web-storage.ts` 落 IndexedDB；不得向 localStorage 写入
+  任何 `amy-novel:` 数据键（localStorage 只允许保留迁移标记）。
 - IPC 参数是运行时信任边界，写操作应使用 Zod 或等价解析器校验。
 - 日志和 GenerationEvent 只记录摘要、ID、Token、耗时和状态，不记录 API Key、完整 Prompt
   或整章正文。

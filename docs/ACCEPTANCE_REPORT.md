@@ -317,3 +317,20 @@ Autopilot 运行台，提供三档模式选择、启动/继续/重试入口和�
 存量类型欠账（fixture 缺 `cycleSize`/`scopeAdvice`、空值收窄、未使用导入等）；
 规范写入 `DEVELOPMENT_GUIDE.md` 第 4 节。`pnpm check`（115 项测试）与
 `pnpm verify` 均通过；评估后临时密钥文件已删除。
+
+## 2026-08-31 AN-006 Web 长篇存储迁移 IndexedDB
+
+Web 端所有 `amy-novel:` 键值数据从 localStorage 迁至 IndexedDB。新增
+`src/renderer/src/platform/web-storage.ts`：内存镜像维持原同步 `read/write` 接口
+（约 40 处调用点零改动），持久化走写穿队列按提交顺序执行；启动装载 IndexedDB 到
+镜像后，一次性把旧 localStorage 数据迁入并清源（中断重跑不会用旧值覆盖新数据），
+localStorage 只保留迁移标记。首屏读取前由新增的 `PlatformPort.ready()` 等待装载
+完成，store 的 `loadNovels` 统一走该门（Electron 端立即返回）；`deleteNovel` 与
+findings/proposals 键扫描改为经存储层删除/枚举，不再直接触碰 localStorage。
+
+测试（jsdom + fake-indexeddb，走真实 `webPlatform` 端口）：旧 localStorage 作品与
+章节迁移后可读、原键清源且无关键不受影响；60 章 × 4,000 字正文写入后模拟页面重载
+全部恢复、localStorage 无任何数据键；项目包导入往返（正文/版本/实体/工作流一致）
+与删除作品后的存储清理。工程侧新增 `tests/web/` 归属 web typecheck 工程（渲染层
+测试不再拉入 node 工程，避免 `window` 全局声明失效）。`pnpm verify` 通过：
+27 个测试文件、118 项测试通过，双端生产构建通过。

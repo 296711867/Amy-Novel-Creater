@@ -87,6 +87,8 @@ export interface CreateNovelResult {
 
 export interface PlatformPort {
   readonly host: "electron" | "web";
+  /** 存储就绪门：Web 端需先完成 IndexedDB 装载与 localStorage 迁移。 */
+  ready(): Promise<void>;
   listNovels(): Promise<Novel[]>;
   deleteNovel(novelId: string): Promise<void>;
   importNovelProject(bundle: NovelProjectBundle): Promise<Novel>;

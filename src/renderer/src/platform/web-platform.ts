@@ -93,6 +93,14 @@ import {
   type TimelineEvent,
 } from "@domain/continuity";
 import type { NovelProjectBundle } from "@domain/project-export";
+// AN-006：数据落 IndexedDB（内存镜像保持同步读），localStorage 仅存迁移标记。
+import {
+  initWebStorage,
+  keysWithPrefix,
+  read,
+  remove,
+  write,
+} from "./web-storage";
 import {
   applyNovelPlan,
   validateNovelPlanContent,
@@ -172,19 +180,6 @@ const planningPlanProposalsKey = (novelId: string) =>
   `amy-novel:planning-proposals:${novelId}`;
 const workflowRunsKey = (novelId: string) =>
   `amy-novel:workflow-runs:${novelId}`;
-
-function read<T>(key: string, fallback: T): T {
-  try {
-    const value = localStorage.getItem(key);
-    return value ? (JSON.parse(value) as T) : fallback;
-  } catch {
-    return fallback;
-  }
-}
-
-function write<T>(key: string, value: T): void {
-  localStorage.setItem(key, JSON.stringify(value));
-}
 
 async function requestWebPlanning(
   profile: ModelProfile,
@@ -376,6 +371,8 @@ function reviewWebCandidate(candidateId: string): {
 
 export const webPlatform: PlatformPort = {
   host: "web",
+  /** 首次读取前等待 IndexedDB 装载与旧数据迁移完成。 */
+  ready: () => initWebStorage(),
   async getDiagnostics() {
     return {
       generatedAt: new Date().toISOString(),
@@ -700,16 +697,16 @@ export const webPlatform: PlatformPort = {
       ),
       batches = read<GenerationBatch[]>(BATCHES_KEY, []);
     for (const candidate of candidates) {
-      localStorage.removeItem(findingsKey(candidate.id));
-      localStorage.removeItem(proposalsKey(candidate.id));
+      remove(findingsKey(candidate.id));
+      remove(proposalsKey(candidate.id));
     }
     for (const chapter of chapters) {
-      localStorage.removeItem(versionsKey(chapter.id));
-      localStorage.removeItem(candidatesKey(chapter.id));
+      remove(versionsKey(chapter.id));
+      remove(candidatesKey(chapter.id));
     }
     for (const batch of batches.filter((item) => item.novelId === id)) {
-      localStorage.removeItem(jobsKey(batch.id));
-      localStorage.removeItem(eventsKey(batch.id));
+      remove(jobsKey(batch.id));
+      remove(eventsKey(batch.id));
     }
     [
       chaptersKey(id),
@@ -726,7 +723,7 @@ export const webPlatform: PlatformPort = {
       planningCyclesKey(id),
       planningPlanProposalsKey(id),
       `amy-novel:name-pool:${id}`,
-    ].forEach((key) => localStorage.removeItem(key));
+    ].forEach((key) => remove(key));
     write(
       NOVELS_KEY,
       readNovels().filter((item) => item.id !== id),
@@ -1700,9 +1697,7 @@ export const webPlatform: PlatformPort = {
     return read<StoredFinding[]>(findingsKey(id), []);
   },
   async updateFinding(id: string, status: StoredFinding["status"]) {
-    for (const candidate of Object.keys(localStorage).filter((key) =>
-      key.startsWith("amy-novel:findings:"),
-    )) {
+    for (const candidate of keysWithPrefix("amy-novel:findings:")) {
       const list = read<StoredFinding[]>(candidate, []),
         index = list.findIndex((item) => item.id === id);
       if (index >= 0) {
@@ -1721,9 +1716,7 @@ export const webPlatform: PlatformPort = {
     return read<FactProposal[]>(proposalsKey(id), []);
   },
   async updateFactProposal(id: string, status: FactProposal["status"]) {
-    for (const key of Object.keys(localStorage).filter((value) =>
-      value.startsWith("amy-novel:proposals:"),
-    )) {
+    for (const key of keysWithPrefix("amy-novel:proposals:")) {
       const list = read<FactProposal[]>(key, []),
         index = list.findIndex((item) => item.id === id);
       if (index >= 0) {
