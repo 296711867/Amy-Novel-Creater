@@ -693,3 +693,28 @@ React 卸载整棵组件树（入口无 ErrorBoundary，表现为全窗白屏）
   不封存）、全部入正史后自动封存并开下一周期（31–40）、到达目标收工
   （巡航清除+自动接受关闭+localStorage 清理）；
 - `pnpm check` 通过（214 项测试）；真实模型多周期长跑效果待用户实测。
+
+## 2026-09-02 AN-013（一）前端拆包：路由懒加载、vendor 分包与 renderer 压缩修复
+
+**背景**：AN-025~035 落地后主包涨至 1.39MB（AN-013 立项时 537KB），拆包转为紧急。
+
+**实现**：
+
+- 13 个页面组件改为 `React.lazy` 按路由分包 + `Suspense` 兜底（App 内联四页保持首屏）；
+  HashRouter + 相对 base，Electron file:// 与 Web 双端可加载；
+- 双端 vite `manualChunks`：vendor-react（react/react-dom/zustand/router）232KB、
+  vendor-zod 140KB、vendor-icons 22KB 独立分包；
+- **顺带修复**：electron-vite renderer 生产构建默认未压缩（v1.0.0 安装包内是
+  1.39MB 未压缩代码）——显式 `minify: "esbuild"` 后入口 190KB；
+- novel-store（2,760 行）按业务边界拆出 store/auto-review.ts、store/cruise.ts、
+  store/global-review.ts 与 utils.ts（切片工厂注入 set/get，模块级定时器与
+  持久化助手随切片迁移），主文件 2,033 行；对外导出不变，全部调用方零改动。
+
+**验证**：
+
+- 双端构建：入口 chunk 190KB、最大 chunk 232KB，全部 <500KB，无构建警告；
+  Electron 产物 script 引用为相对路径（file:// 可加载）；
+- `pnpm verify` 通过：214 项测试（含巡航/自动审阅/全局审查全部 store 用例）
+  + typecheck + 双端生产构建；
+- 剩余范围见 BACKLOG（web-platform 与 PlanningWorkflowPage 拆分、store 进一步
+  切片）。
