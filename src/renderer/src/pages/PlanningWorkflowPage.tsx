@@ -202,6 +202,17 @@ export function PlanningWorkflowPage(): React.JSX.Element {
   const stopCruise = useNovelStore((state) => state.stopCruise);
   const resumeCruise = useNovelStore((state) => state.resumeCruise);
   const [cruiseTarget, setCruiseTarget] = useState(novel?.targetChapters ?? 30);
+  // 巡航从当前进度续写：用已入正史章节数与最新章号明确“不会从第 1 章重来”。
+  const acceptedProgress = useMemo(() => {
+    const accepted = chapters.filter((item) => item.status === "accepted");
+    return {
+      count: accepted.length,
+      latest: accepted.reduce(
+        (max, item) => Math.max(max, item.position),
+        0,
+      ),
+    };
+  }, [chapters]);
   const reviewPlanningProposal = useNovelStore(
     (state) => state.reviewPlanningProposal,
   );
@@ -1067,22 +1078,23 @@ export function PlanningWorkflowPage(): React.JSX.Element {
                 ) : (
                   <>
                     <p>
-                      一个按钮循环跑到目标章数：周期规划（设定提案自动接受）→
-                      正文连写与正史建议自动接受 → 封存（实际结束状态自动起草）→
-                      下一周期。全程留痕，事后可用故事总览/整书连读回看审计。
+                      一个按钮从<b>当前进度</b>接着循环写到目标章数：周期规划（设定提案
+                      自动接受）→ 正文连写与正史建议自动接受 → 封存（实际结束状态自动
+                      起草）→ 下一周期。<b>已入正史的章节不会重写</b>；全程留痕，事后
+                      可用故事总览/整书连读回看审计。
                     </p>
                     <div className="cruise-form">
                       <label>
                         巡航到第几章
                         <input
                           type="number"
-                          min={1}
+                          min={Math.max(1, acceptedProgress.latest)}
                           max={novel?.targetChapters ?? 999}
                           value={cruiseTarget}
                           onChange={(event) =>
                             setCruiseTarget(Number(event.target.value) || 0)
-                          }
-                        />
+                        }
+                      />
                       </label>
                       <button
                         className="primary"
@@ -1103,10 +1115,13 @@ export function PlanningWorkflowPage(): React.JSX.Element {
                           startCruise(novelId, target);
                         }}
                       >
-                        开启巡航
+                        从当前进度开启巡航
                       </button>
                     </div>
                     <small>
+                      {acceptedProgress.count > 0
+                        ? `将从当前进度继续：已入正史 ${acceptedProgress.count} 章（最新到第 ${acceptedProgress.latest} 章），只写第 ${acceptedProgress.latest + 1} 章往后，不会重写已有章节。`
+                        : "将从第 1 章开始循环写到目标章数。"}
                       建议先跑完一卷人工确认质量后再开；十步向导完成后即可使用。
                     </small>
                   </>

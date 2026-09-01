@@ -57,12 +57,17 @@
 .autopilot-state{display:inline-flex;align-items:center;gap:7px;color:var(--accent);font-weight:700;font-size:13px}
 @media(max-width:680px){.autopilot-modes{grid-template-columns:1fr}}
 /* AN-035 全自动巡航卡片 */
-.cruise-card{border:1px solid var(--accent);border-radius:14px;padding:18px;margin-bottom:16px;background:var(--surface)}
-.cruise-card h3{margin:0 0 8px;display:flex;align-items:center;gap:8px}
-.cruise-status{border-radius:10px;padding:10px 12px;background:var(--muted);line-height:1.6;margin:0 0 12px}
-.cruise-status b{display:inline-block;margin-right:8px;padding:2px 8px;border-radius:99px;font-size:12px;color:#fff;background:var(--accent)}
+.cruise-card{padding:20px 22px;margin-bottom:16px;border-color:var(--accent)}
+.cruise-card h3{margin:0 0 10px;display:flex;align-items:center;gap:8px}
+.cruise-card>p{margin:0 0 14px;line-height:1.7;color:var(--sub)}
+.cruise-card>p b{color:var(--text)}
+.cruise-status{border-radius:10px;padding:11px 13px;background:var(--muted);line-height:1.65;margin:0 0 14px!important;color:var(--text)}
+.cruise-status b{display:inline-block;margin-right:8px;padding:3px 9px;border-radius:99px;font-size:12px;color:#fff;background:var(--accent)}
 .cruise-status[data-status="paused"] b{background:#c0392b}
-.cruise-card small{display:block;color:var(--sub);line-height:1.6;margin-top:10px}
-.cruise-form{display:flex;gap:12px;align-items:end;flex-wrap:wrap;margin-top:6px}
-.cruise-form label{display:grid;gap:5px;font-size:12px;font-weight:700}
-.cruise-form input{width:120px;border:1px solid var(--border);background:var(--muted);border-radius:9px;padding:9px 11px;outline:0}
+.cruise-card small{display:block;color:var(--sub);line-height:1.65;margin-top:0}
+.cruise-card .workflow-actions{margin-top:0;justify-content:flex-start}
+.cruise-form{display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap;margin:2px 0 14px}
+.cruise-form label{display:grid;gap:6px;margin-bottom:0;font-size:12px;font-weight:700}
+.cruise-form input{width:130px;border:1px solid var(--border);background:var(--bg);border-radius:9px;padding:10px 12px;outline:0}
+.cruise-form input:focus{border-color:var(--accent);box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 14%,transparent)}
+.cruise-form .primary{flex:none;padding:10px 16px}
