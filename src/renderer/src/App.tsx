@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { lazy, Suspense, useEffect, useMemo, useState, type FormEvent } from "react";
 import {
   Archive,
   BookOpen,
@@ -31,21 +31,52 @@ import {
 import { CYCLE_SIZE_MAX, CYCLE_SIZE_MIN } from "@domain/novel";
 import type { ScopeAdvice } from "@domain/scope-advisor";
 import { useNovelStore } from "./store/novel-store";
-import { WriterPage } from "./pages/WriterPage";
-import { BiblePage } from "./pages/BiblePage";
-import { ContinuityPage } from "./pages/ContinuityPage";
-import { BookReaderPage } from "./pages/BookReaderPage";
-import { StructurePage } from "./pages/StructurePage";
-import { ContextPage } from "./pages/ContextPage";
-import { UsagePage } from "./pages/UsagePage";
-import { SettingsPage } from "./pages/SettingsPage";
-import { ChapterGeneratePage } from "./pages/ChapterGeneratePage";
-import { BatchesPage } from "./pages/BatchesPage";
-import { DataPage } from "./pages/DataPage";
-import { PlanningWorkflowPage } from "./pages/PlanningWorkflowPage";
-import { TemplatesPage } from "./pages/TemplatesPage";
 import "./novel-actions.css";
 import "./new-novel.css";
+
+// AN-013：页面按路由懒加载，压缩首屏主包。所有页面共用 HashRouter，
+// 动态 chunk 在 Electron（file://，renderer base 为相对路径）与 Web 下均可加载。
+const page = (load: () => Promise<{ [K: string]: unknown }>, key: string) =>
+  lazy(() =>
+    load().then((module) => ({ default: module[key] as React.ComponentType })),
+  );
+const WriterPage = page(
+  () => import("./pages/WriterPage"),
+  "WriterPage",
+);
+const BiblePage = page(() => import("./pages/BiblePage"), "BiblePage");
+const ContinuityPage = page(
+  () => import("./pages/ContinuityPage"),
+  "ContinuityPage",
+);
+const BookReaderPage = page(
+  () => import("./pages/BookReaderPage"),
+  "BookReaderPage",
+);
+const StructurePage = page(
+  () => import("./pages/StructurePage"),
+  "StructurePage",
+);
+const ContextPage = page(() => import("./pages/ContextPage"), "ContextPage");
+const UsagePage = page(() => import("./pages/UsagePage"), "UsagePage");
+const SettingsPage = page(
+  () => import("./pages/SettingsPage"),
+  "SettingsPage",
+);
+const ChapterGeneratePage = page(
+  () => import("./pages/ChapterGeneratePage"),
+  "ChapterGeneratePage",
+);
+const BatchesPage = page(() => import("./pages/BatchesPage"), "BatchesPage");
+const DataPage = page(() => import("./pages/DataPage"), "DataPage");
+const PlanningWorkflowPage = page(
+  () => import("./pages/PlanningWorkflowPage"),
+  "PlanningWorkflowPage",
+);
+const TemplatesPage = page(
+  () => import("./pages/TemplatesPage"),
+  "TemplatesPage",
+);
 
 const genres = ["玄幻", "都市", "科幻", "悬疑", "言情", "历史", "奇幻", "其他"];
 
@@ -969,7 +1000,15 @@ export default function App(): React.JSX.Element {
     <div className="app-shell">
       <Sidebar />
       <div className="content">
-        <Routes>
+        <Suspense
+          fallback={
+            <div className="app-loading">
+              <Feather size={34} />
+              <span>正在打开页面…</span>
+            </div>
+          }
+        >
+          <Routes>
           <Route path="/" element={<HomePage />} />
           <Route path="/novels" element={<NovelsPage />} />
           <Route path="/novels/new" element={<NewNovelPage />} />
@@ -1003,7 +1042,8 @@ export default function App(): React.JSX.Element {
           <Route path="/templates" element={<TemplatesPage />} />
           <Route path="/usage" element={<UsagePage />} />
           <Route path="*" element={<Navigate to="/" replace />} />
-        </Routes>
+          </Routes>
+        </Suspense>
       </div>
       <FirstRunGuide />
     </div>
