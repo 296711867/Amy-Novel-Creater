@@ -94,3 +94,16 @@ typecheck 才算完成，不允许只靠 Vitest 运行时兜底（错误导入�
 
 优先拆具体模块或组件，不建设通用插件框架。路由页面使用懒加载；大对象存储按领域拆分，
 但 Domain 规则保持宿主无关。
+
+Renderer 状态订阅硬规则：zustand selector 必须返回稳定引用——兜底空值用模块级
+常量（如 `EMPTY_LIST`），不得在 selector 内写 `?? []`、`?? {}` 或 `filter/map`
+生成新数组/对象。`useSyncExternalStore` 快照不稳定会触发无限重渲染，React 抛
+"Maximum update depth exceeded" 后卸载整棵组件树，用户表现为白屏（AN-010
+PersonaPanel、AN-025 规划页两次同类事故）。入口层保留全局 ErrorBoundary 兜底，
+但新代码不得依赖它。
+
+## 7. 界面崩溃兜底
+
+`main.tsx` 的 `ErrorBoundary` 捕获任何页面级渲染异常并展示可恢复错误页
+（返回首页 / 重新加载），不允许出现无反馈白屏。错误信息只进本地控制台，
+不进入日志文件、事件或导出包。

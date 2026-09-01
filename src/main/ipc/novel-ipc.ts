@@ -70,6 +70,13 @@ import {
 import { repairPlanningContentOnce } from "@application/repair-planning-content";
 import { reviewPlanningProposal } from "@application/review-planning-proposal";
 import type { PlanningProposalStatus } from "@domain/planning-proposal";
+import {
+  GLOBAL_REVIEW_CYCLE_ID,
+  globalReviewPrompt,
+  parseGlobalReview,
+  type GlobalFinding,
+} from "@domain/global-consistency";
+import { runWholeBookReview } from "@application/whole-book-review-runner";
 import type {
   CreateWorkflowRunInput,
   UpdateWorkflowRunInput,
@@ -487,6 +494,207 @@ export function registerNovelIpc(
       status: Exclude<PlanningProposalStatus, "pending">,
     ) => reviewPlanningProposal(database, novelId, proposalId, status),
   );
+  ipc.handle(IPC_CHANNELS.listGlobalFindings, (_event, novelId: string) =>
+    database.listGlobalFindings(novelId),
+  );
+  ipc.handle(
+    IPC_CHANNELS.saveGlobalFindings,
+    (_event, novelId: string, findings: GlobalFinding[]) =>
+      database.saveGlobalFindings(novelId, findings),
+  );
+  ipc.handle(
+    IPC_CHANNELS.reviewGlobalConsistency,
+    async (_event, novelId: string) => {
+      const novel = await database.getNovel(novelId);
+      if (!novel) throw new Error("作品不存在");
+      const profiles = await database.listModelProfiles(),
+        profile = profiles.find((item) => item.isDefault) ?? profiles[0];
+      if (!profile) throw new Error("请先在设置页配置默认写作模型");
+      const batchId = `global-review:${novelId}`;
+      const emitReview = async (
+        level: "info" | "success" | "warning" | "error",
+        message: string,
+        data: Record<string, unknown> = {},
+      ) => {
+        try {
+          broadcastEvent(
+            await database.saveGenerationEvent({
+              batchId,
+              novelId,
+              chapterId: null,
+              stage: "global_review",
+              level,
+              message,
+              data,
+            }),
+          );
+        } catch {
+          // 过程事件失败不影响审查本体。
+        }
+      };
+      try {
+        const [bible, entities, chapters, characterStates, timeline, foreshadow] =
+          await Promise.all([
+            database.listBibleSections(novelId),
+            database.listStoryEntities(novelId),
+            database.listChapters(novelId),
+            database.listCharacterStates(novelId),
+            database.listTimelineEvents(novelId),
+            database.listForeshadowThreads(novelId),
+          ]);
+        const accepted = chapters
+          .filter((item) => item.status === "accepted" && item.content.trim())
+          .sort((a, b) => a.position - b.position);
+        const prompt = globalReviewPrompt({
+          novelTitle: novel.title,
+          genre: novel.genre,
+          bible: bible.map((item) => ({
+            title: item.title,
+            content: item.content,
+          })),
+          entities,
+          chapters: accepted,
+          characterStates,
+          timeline,
+          foreshadow,
+          recentContents: accepted.slice(-2).map((item) => ({
+            position: item.position,
+            title: item.title,
+            content: item.content,
+          })),
+          inputBudget: Math.max(4000, profile.contextWindow - 4000),
+        });
+        await emitReview(
+          "info",
+          `全局一致性审查开始（约 ${estimateTokens(prompt).toLocaleString()} tokens，模型 ${profile.modelId}）`,
+          { inputTokens: estimateTokens(prompt), model: profile.modelId },
+        );
+        const result = await streamOpenAICompatible(
+          profile,
+          await secrets.get(profile.id),
+          prompt,
+          4000,
+          0.3,
+          () => {},
+          fetch,
+          AbortSignal.timeout(300_000),
+          "disabled",
+        );
+        const outcome = parseGlobalReview(result.content, { novelId });
+        // AI 发现替换上一轮；忽略状态按稳定 id 延续，规则发现原样保留。
+        const previous = await database.listGlobalFindings(novelId),
+          dismissed = new Set(
+            previous
+              .filter(
+                (item) => item.source === "ai" && item.status === "dismissed",
+              )
+              .map((item) => item.id),
+          ),
+          aiFindings = outcome.findings.map((item) => ({
+            ...item,
+            status: dismissed.has(item.id)
+              ? ("dismissed" as const)
+              : item.status,
+          })),
+          merged = [
+            // AI 发现替换上一轮 AI 发现；作者疑点标记（source=author）与规则发现保留。
+            ...previous.filter((item) => item.source !== "ai"),
+            ...aiFindings,
+          ];
+        await database.saveGlobalFindings(novelId, merged);
+        const proposals = await database.addPlanningProposals(
+          novelId,
+          GLOBAL_REVIEW_CYCLE_ID,
+          1,
+          accepted.at(-1)?.position ?? 1,
+          outcome.proposals,
+        );
+        await database.saveUsage({
+          novelId,
+          chapterId: null,
+          operation: "global_review",
+          provider: profile.provider,
+          model: profile.modelId,
+          inputTokens: result.inputTokens,
+          outputTokens: result.outputTokens,
+          cachedTokens: result.cachedTokens,
+          cost: null,
+          measurement: result.inputTokens ? "provider" : "estimated",
+        });
+        await emitReview(
+          outcome.findings.some((item) => item.severity === "error")
+            ? "warning"
+            : "success",
+          outcome.findings.length
+            ? `全局审查发现 ${outcome.findings.length} 项问题，${proposals.length} 项设定修复提案`
+            : "全局审查通过，未发现问题",
+          {
+            summary: outcome.summary,
+            findings: outcome.findings.map((item) => item.message),
+            proposals: proposals.length,
+          },
+        );
+        return { summary: outcome.summary, findings: aiFindings, proposals };
+      } catch (error) {
+        await emitReview(
+          "error",
+          `全局一致性审查失败：${error instanceof Error ? error.message : "未知错误"}`,
+        );
+        throw error;
+      }
+    },
+  );
+  // AN-032：全书分窗口通读审稿（顺序窗口 + 滚动摘要），编排共享
+  // Application runner（whole-book-review-runner），与 Web 端同一装配语义。
+  ipc.handle(
+    IPC_CHANNELS.reviewWholeBook,
+    async (_event, novelId: string, windowSize?: number) => {
+      const novel = await database.getNovel(novelId);
+      if (!novel) throw new Error("作品不存在");
+      const profiles = await database.listModelProfiles(),
+        profile = profiles.find((item) => item.isDefault) ?? profiles[0];
+      if (!profile) throw new Error("请先在设置页配置默认写作模型");
+      return runWholeBookReview(
+        novelId,
+        windowSize ? { windowSize } : undefined,
+        {
+          novel,
+          profile,
+          listChapters: (id) => database.listChapters(id),
+          listStoryEntities: (id) => database.listStoryEntities(id),
+          listCharacterStates: (id) => database.listCharacterStates(id),
+          listTimelineEvents: (id) => database.listTimelineEvents(id),
+          listForeshadowThreads: (id) => database.listForeshadowThreads(id),
+          listGlobalFindings: (id) => database.listGlobalFindings(id),
+          saveGlobalFindings: (id, findings) =>
+            database.saveGlobalFindings(id, findings),
+          saveUsage: (input) => database.saveUsage(input),
+          saveGenerationEvent: async (event) => {
+            broadcastEvent(await database.saveGenerationEvent(event));
+          },
+          callModel: async (prompt) => {
+            const result = await streamOpenAICompatible(
+              profile,
+              await secrets.get(profile.id),
+              prompt,
+              3000,
+              0.2,
+              () => {},
+              fetch,
+              AbortSignal.timeout(300_000),
+              "disabled",
+            );
+            return {
+              content: result.content,
+              inputTokens: result.inputTokens,
+              outputTokens: result.outputTokens,
+              cachedTokens: result.cachedTokens,
+            };
+          },
+        },
+      );
+    },
+  );
   ipc.handle(IPC_CHANNELS.listChapters, (_event, novelId: string) =>
     database.listChapters(novelId),
   );
@@ -903,6 +1111,9 @@ export function registerNovelIpc(
       status: GenerationBatch["status"],
       patch?: { awaitingReview?: boolean },
     ) => database.setBatchStatus(id, status, patch),
+  );
+  ipc.handle(IPC_CHANNELS.deleteGenerationBatch, (_event, id: string) =>
+    database.deleteGenerationBatch(id),
   );
   ipc.handle(IPC_CHANNELS.listGenerationEvents, (_event, id: string) =>
     database.listGenerationEvents(id),

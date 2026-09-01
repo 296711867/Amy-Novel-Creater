@@ -37,6 +37,14 @@
 .reader-content{white-space:pre-wrap;overflow-wrap:anywhere;font-size:14px;line-height:1.95;color:var(--text)}
 .reader-editor{width:100%;min-height:46vh;border:1px solid var(--accent);border-radius:11px;background:var(--bg);padding:14px 16px;outline:none;resize:vertical;font:14px/1.9 inherit;color:var(--text)}
 .reader-pane .flash-ok{padding:9px 12px;border-radius:9px;background:color-mix(in srgb,#56a875 16%,var(--surface));color:#3f7f5b;font-size:12.5px}
+/* 工作台正史建议列表：禁用态必须可见（候选稿未接受时按钮锁定），避免“看着能点却点不动”。 */
+.reader-pane .proposal-list h4{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
+.reader-pane .proposal-list button:disabled{opacity:.5;cursor:not-allowed}
+.proposal-hint{margin:0;padding:9px 12px;border-left:3px solid var(--accent);border-radius:8px;background:color-mix(in srgb,var(--accent) 10%,var(--muted));color:var(--text);font-size:12.5px;line-height:1.55}
+.proposal-list .accept-all{display:inline-flex;align-items:center;gap:6px;border:0;border-radius:8px;background:var(--accent);color:#fff;padding:6px 11px;font-weight:700;font-size:12.5px}
+.proposal-list .accept-all:disabled{opacity:.5;cursor:not-allowed}
+.workbench-controls .auto-review-toggle.on{border-color:var(--accent);background:var(--accent);color:#fff}
+.auto-review-banner{display:flex;align-items:center;gap:9px;padding:10px 14px;border:1px dashed var(--accent);border-radius:11px;background:color-mix(in srgb,var(--accent) 8%,var(--surface));color:var(--text);font-size:12.5px;line-height:1.55}
 .workbench-log{position:sticky;top:12px;max-height:72vh}
 .activity-panel{display:flex;flex-direction:column;max-height:72vh;padding:12px;border:1px solid var(--border);border-radius:14px;background:var(--surface)}
 .activity-panel header{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px}.activity-panel h4{margin:0;font-size:12px;letter-spacing:.06em;color:var(--sub)}

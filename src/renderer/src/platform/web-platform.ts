@@ -52,6 +52,13 @@ import type {
 import type { FactProposal, StoredFinding } from "@domain/quality-check";
 import { estimateTokens } from "@domain/context-pack";
 import {
+  GLOBAL_REVIEW_CYCLE_ID,
+  globalReviewPrompt,
+  parseGlobalReview,
+  type GlobalFinding,
+} from "@domain/global-consistency";
+import { runWholeBookReview } from "@application/whole-book-review-runner";
+import {
   novelPlanningPrompt,
   planningMaxOutputTokens,
 } from "@domain/planning";
@@ -180,6 +187,8 @@ const planningPlanProposalsKey = (novelId: string) =>
   `amy-novel:planning-proposals:${novelId}`;
 const workflowRunsKey = (novelId: string) =>
   `amy-novel:workflow-runs:${novelId}`;
+const globalFindingsKey = (novelId: string) =>
+  `amy-novel:global-findings:${novelId}`;
 
 async function requestWebPlanning(
   profile: ModelProfile,
@@ -2148,6 +2157,22 @@ export const webPlatform: PlatformPort = {
         endChapter: policy.endChapter,
       },
     });
+    // AN-028：同一作品同时只允许一个未完结批次。多批次并存时自动审阅会
+    // 在批次间来回跳，还会对已入正史的章节重复排队生成。
+    const existingBatch = (await this.listGenerationBatches()).find(
+      (item) =>
+        item.novelId === novelId &&
+        item.status !== "completed" &&
+        item.status !== "cancelled",
+    );
+    if (existingBatch)
+      throw new Error(
+        `已有进行中的批次（第 ${existingBatch.policy.startChapter}–${existingBatch.policy.endChapter} 章，${
+          existingBatch.awaitingReview
+            ? "等待审核"
+            : `状态：${existingBatch.status}`
+        }）。请先到生成工作台继续或停止该批次，再创建新任务。`,
+      );
     const now = new Date().toISOString(),
       id = nanoid(),
       batch: GenerationBatch = {
@@ -2208,6 +2233,156 @@ export const webPlatform: PlatformPort = {
     ]);
     return event;
   },
+  async listGlobalFindings(novelId: string) {
+    return read<GlobalFinding[]>(globalFindingsKey(novelId), []);
+  },
+  async saveGlobalFindings(novelId: string, findings: GlobalFinding[]) {
+    write(globalFindingsKey(novelId), findings);
+    return findings;
+  },
+  async reviewGlobalConsistency(novelId: string) {
+    const novel = readNovels().find((item) => item.id === novelId);
+    if (!novel) throw new Error("作品不存在");
+    const profile = read<ModelProfile[]>(PROFILES_KEY, []).find(
+      (item) => item.isDefault,
+    );
+    if (!profile) throw new Error("请先在设置页配置默认写作模型");
+    const key = sessionStorage.getItem(`amy-novel:secret:${profile.id}`) ?? "";
+    const [bible, entities, chapters, characterStates, timeline, foreshadow] =
+      await Promise.all([
+        this.listBibleSections(novelId),
+        this.listStoryEntities(novelId),
+        this.listChapters(novelId),
+        this.listCharacterStates(novelId),
+        this.listTimelineEvents(novelId),
+        this.listForeshadowThreads(novelId),
+      ]);
+    const accepted = [...chapters]
+      .filter((item) => item.status === "accepted" && item.content.trim())
+      .sort((a, b) => a.position - b.position);
+    const recentContents = accepted.slice(-2).map((item) => ({
+      position: item.position,
+      title: item.title,
+      content: item.content,
+    }));
+    const prompt = globalReviewPrompt({
+      novelTitle: novel.title,
+      genre: novel.genre,
+      bible: bible.map((item) => ({ title: item.kind, content: item.content })),
+      entities,
+      chapters: accepted,
+      characterStates,
+      timeline,
+      foreshadow,
+      recentContents,
+      inputBudget: Math.max(4000, profile.contextWindow - 4000),
+    });
+    const batchId = `global-review:${novelId}`;
+    try {
+      await this.appendGenerationEvent?.({
+        batchId,
+        novelId,
+        chapterId: null,
+        stage: "global_review",
+        level: "info",
+        message: `全局一致性审查开始（约 ${estimateTokens(prompt).toLocaleString()} tokens，模型 ${profile.modelId}）`,
+        data: { inputTokens: estimateTokens(prompt), model: profile.modelId },
+      });
+      const result = await requestWebPlanning(profile, key, prompt, 4000, 0.3);
+      const outcome = parseGlobalReview(result.content, { novelId });
+      // AI 发现替换上一轮 AI 发现；忽略状态按稳定 id 延续，规则发现原样保留。
+      const previous = read<GlobalFinding[]>(globalFindingsKey(novelId), []),
+        dismissed = new Set(
+          previous
+            .filter((item) => item.source === "ai" && item.status === "dismissed")
+            .map((item) => item.id),
+        ),
+        aiFindings = outcome.findings.map((item) => ({
+          ...item,
+          status: dismissed.has(item.id) ? ("dismissed" as const) : item.status,
+        })),
+        // AI 发现替换上一轮 AI 发现；作者疑点标记（source=author）与规则发现保留。
+        merged = [
+          ...previous.filter((item) => item.source !== "ai"),
+          ...aiFindings,
+        ];
+      write(globalFindingsKey(novelId), merged);
+      const proposals = addWebPlanningProposals(
+        novelId,
+        GLOBAL_REVIEW_CYCLE_ID,
+        1,
+        accepted.at(-1)?.position ?? 1,
+        outcome.proposals,
+      );
+      await this.saveUsage({
+        novelId,
+        chapterId: null,
+        operation: "global_review",
+        provider: profile.provider,
+        model: profile.modelId,
+        inputTokens: result.inputTokens,
+        outputTokens: result.outputTokens,
+        cachedTokens: result.cachedTokens,
+        cost: null,
+        measurement: result.measured ? "provider" : "estimated",
+      });
+      await this.appendGenerationEvent?.({
+        batchId,
+        novelId,
+        chapterId: null,
+        stage: "global_review",
+        level: outcome.findings.some((item) => item.severity === "error")
+          ? "warning"
+          : "success",
+        message: outcome.findings.length
+          ? `全局审查发现 ${outcome.findings.length} 项问题，${proposals.length} 项设定修复提案`
+          : "全局审查通过，未发现问题",
+        data: {
+          summary: outcome.summary,
+          findings: outcome.findings.map((item) => item.message),
+          proposals: proposals.length,
+        },
+      });
+      return { summary: outcome.summary, findings: aiFindings, proposals };
+    } catch (error) {
+      await this.appendGenerationEvent?.({
+        batchId,
+        novelId,
+        chapterId: null,
+        stage: "global_review",
+        level: "error",
+        message: `全局一致性审查失败：${error instanceof Error ? error.message : "未知错误"}`,
+        data: {},
+      });
+      throw error;
+    }
+  },
+  async reviewWholeBook(novelId: string, options?: { windowSize?: number }) {
+    const novel = readNovels().find((item) => item.id === novelId);
+    if (!novel) throw new Error("作品不存在");
+    const profile = read<ModelProfile[]>(PROFILES_KEY, []).find(
+      (item) => item.isDefault,
+    );
+    if (!profile) throw new Error("请先在设置页配置默认写作模型");
+    const key =
+      sessionStorage.getItem(`amy-novel:secret:${profile.id}`) ?? "";
+    return runWholeBookReview(novelId, options, {
+      novel,
+      profile,
+      listChapters: (id) => this.listChapters(id),
+      listStoryEntities: (id) => this.listStoryEntities(id),
+      listCharacterStates: (id) => this.listCharacterStates(id),
+      listTimelineEvents: (id) => this.listTimelineEvents(id),
+      listForeshadowThreads: (id) => this.listForeshadowThreads(id),
+      listGlobalFindings: (id) => this.listGlobalFindings(id),
+      saveGlobalFindings: (id, findings) =>
+        this.saveGlobalFindings(id, findings),
+      saveUsage: (input) => this.saveUsage(input),
+      saveGenerationEvent: (event) =>
+        this.appendGenerationEvent?.(event) ?? Promise.resolve(),
+      callModel: (prompt) => requestWebPlanning(profile, key, prompt, 3000, 0.2),
+    });
+  },
   async setBatchStatus(
     id: string,
     status: GenerationBatch["status"],
@@ -2224,6 +2399,20 @@ export const webPlatform: PlatformPort = {
     };
     write(BATCHES_KEY, list);
     return list[index];
+  },
+  async deleteGenerationBatch(id: string): Promise<void> {
+    // AN-029：与 Electron 同一状态门禁——进行中/等待审核的批次先停止再删。
+    const list = read<GenerationBatch[]>(BATCHES_KEY, []),
+      batch = list.find((item) => item.id === id);
+    if (!batch) throw new Error("Batch not found");
+    if (batch.status !== "completed" && batch.status !== "cancelled")
+      throw new Error("仅已完成或已取消的批次可删除；请先停止该批次");
+    write(
+      BATCHES_KEY,
+      list.filter((item) => item.id !== id),
+    );
+    remove(jobsKey(id));
+    remove(eventsKey(id));
   },
   async updateGenerationJob(
     id: string,

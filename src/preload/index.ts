@@ -39,6 +39,7 @@ import type { NovelProjectBundle } from "@domain/project-export";
 import type { PlanningWorkflow } from "@domain/planning-workflow";
 import type { SavePlanningCycleInput } from "@domain/planning-cycle";
 import type { PlanningProposalStatus } from "@domain/planning-proposal";
+import type { GlobalFinding } from "@domain/global-consistency";
 import type {
   AnalyzeStyleTemplateInput,
   SaveStyleTemplateInput,
@@ -100,6 +101,25 @@ const api: AmyNovelApi = {
       novelId,
       proposalId,
       status,
+    ),
+  listGlobalFindings: (novelId: string) =>
+    ipcRenderer.invoke(IPC_CHANNELS.listGlobalFindings, novelId),
+  saveGlobalFindings: (novelId: string, findings: GlobalFinding[]) =>
+    ipcRenderer.invoke(
+      IPC_CHANNELS.saveGlobalFindings,
+      novelId,
+      findings,
+    ),
+  reviewGlobalConsistency: (novelId: string) =>
+    ipcRenderer.invoke(IPC_CHANNELS.reviewGlobalConsistency, novelId),
+  reviewWholeBook: (
+    novelId: string,
+    options?: { windowSize?: number },
+  ) =>
+    ipcRenderer.invoke(
+      IPC_CHANNELS.reviewWholeBook,
+      novelId,
+      options?.windowSize,
     ),
   createWorkflowRun: (input: CreateWorkflowRunInput) =>
     ipcRenderer.invoke(IPC_CHANNELS.createWorkflowRun, input),
@@ -237,6 +257,8 @@ const api: AmyNovelApi = {
     status: GenerationBatch["status"],
     patch?: { awaitingReview?: boolean },
   ) => ipcRenderer.invoke(IPC_CHANNELS.setBatchStatus, id, status, patch),
+  deleteGenerationBatch: (id: string) =>
+    ipcRenderer.invoke(IPC_CHANNELS.deleteGenerationBatch, id),
   listGenerationEvents: (id: string) =>
     ipcRenderer.invoke(IPC_CHANNELS.listGenerationEvents, id),
   onGenerationEvent: (listener: (event: GenerationEvent) => void) => {

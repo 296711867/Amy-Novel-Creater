@@ -46,6 +46,8 @@ export interface GenerationJob {
   inputTokens: number;
   outputTokens: number;
   error: string;
+  /** AN-023/AN-027：按审查反馈重写本章时注入 Context Pack 的修订要求。 */
+  revisionNotes?: string;
   updatedAt: string;
 }
 export const JOB_STATUS_LABELS: Record<GenerationJobStatus, string> = {
@@ -220,7 +222,9 @@ export type GenerationEventStage =
   | "batch_completed"
   | "plan_started"
   | "plan_received"
-  | "plan_applied";
+  | "plan_applied"
+  | "auto_review"
+  | "global_review";
 export interface GenerationEvent {
   id: string;
   batchId: string;

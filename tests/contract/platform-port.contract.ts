@@ -46,6 +46,14 @@ export interface ContractPort {
   importNovelProject(bundle: NovelProjectBundle): Promise<Novel>;
   listStoryEntities(novelId: string): Promise<StoryEntity[]>;
   listPlanningProposals(novelId: string): Promise<PlanningProposal[]>;
+  deleteGenerationBatch(batchId: string): Promise<void>;
+  listGlobalFindings(
+    novelId: string,
+  ): Promise<import("@domain/global-consistency").GlobalFinding[]>;
+  saveGlobalFindings(
+    novelId: string,
+    findings: import("@domain/global-consistency").GlobalFinding[],
+  ): Promise<import("@domain/global-consistency").GlobalFinding[]>;
 }
 
 export const CONTRACT_NOVEL_INPUT: CreateNovelInput = {
@@ -249,6 +257,13 @@ export function registerPlatformPortContract(
       ).rejects.toThrow(/十步向导|一致性检查/);
     });
 
+    it("删除不存在批次的错误语义一致（AN-029）", async () => {
+      const port = load();
+      await expect(
+        port.deleteGenerationBatch("no-such-batch"),
+      ).rejects.toThrow("Batch not found");
+    });
+
     it("workflow run 创建、部分更新与列表 DTO 一致", async () => {
       const port = load(),
         created = await port.createNovel(CONTRACT_NOVEL_INPUT),
@@ -331,6 +346,47 @@ export function registerPlatformPortContract(
       // 短引用必须按恢复后的新实体 ID 重映射，而不是保留导出包里的旧引用。
       const { entityShortRef } = await import("@domain/story-bible");
       expect(proposals[0].targetRef).toBe(entityShortRef(entities[0]));
+    });
+
+    it("全局一致性发现：保存、替换与可选字段往返一致", async () => {
+      const port = load(),
+        novel = (await port.listNovels()).find(
+          (item) => item.title === CONTRACT_NOVEL_INPUT.title,
+        );
+      if (!novel) throw new Error("契约前置作品不存在");
+      const now = new Date().toISOString();
+      await port.saveGlobalFindings(novel.id, [
+        {
+          id: "rule:location-jump:e1:s1",
+          novelId: novel.id,
+          source: "rule",
+          severity: "warning",
+          category: "location",
+          message: "位置跳变",
+          evidence: "第 1 章 → 第 3 章",
+          suggestion: "补移动事件",
+          targetKind: "setting",
+          targetName: "林舟",
+          chapterPosition: 3,
+          status: "open",
+          createdAt: now,
+        },
+      ]);
+      let stored = await port.listGlobalFindings(novel.id);
+      expect(stored).toHaveLength(1);
+      expect(stored[0]).toMatchObject({
+        id: "rule:location-jump:e1:s1",
+        source: "rule",
+        severity: "warning",
+        suggestion: "补移动事件",
+        targetKind: "setting",
+        chapterPosition: 3,
+        status: "open",
+      });
+      // 第二次保存是整体替换（各端由上层合并规则/AI 来源后写入）。
+      await port.saveGlobalFindings(novel.id, []);
+      stored = await port.listGlobalFindings(novel.id);
+      expect(stored).toHaveLength(0);
     });
   });
 }

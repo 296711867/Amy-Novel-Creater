@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
+  Bot,
   Check,
   Download,
   Loader2,
@@ -9,6 +10,7 @@ import {
   Play,
   RotateCcw,
   Square,
+  Trash2,
   X,
 } from "lucide-react";
 import {
@@ -35,6 +37,8 @@ const FACT_KIND_LABELS: Record<FactProposal["kind"], string> = {
   foreshadow: "伏笔",
 };
 const EMPTY_JOBS: GenerationJob[] = [];
+/** selector 兜底必须用稳定引用：每次返回新数组会触发 useSyncExternalStore 无限重渲染。 */
+const EMPTY_EVENTS: never[] = [];
 
 export function BatchesPage(): React.JSX.Element {
   const store = useNovelStore(),
@@ -132,6 +136,23 @@ export function BatchesPage(): React.JSX.Element {
     }
   }
 
+  // AN-029：清理已完结批次记录；进行中的批次不显示该按钮（平台层还有同一门禁）。
+  async function remove(id: string) {
+    if (
+      !window.confirm(
+        "确定删除这条批次记录吗？任务队列与活动日志将一并删除；已入正史的章节、候选稿与用量统计不受影响。",
+      )
+    )
+      return;
+    setError("");
+    try {
+      await store.deleteBatch(id);
+      await refresh();
+    } catch (value) {
+      setError(value instanceof Error ? value.message : "批次删除失败");
+    }
+  }
+
   return (
     <main className="page batches-page workbench-page">
       <div className="page-heading">
@@ -187,6 +208,7 @@ export function BatchesPage(): React.JSX.Element {
             setNotice(null);
           }}
           onRun={() => void run(batch.id)}
+          onDelete={() => void remove(batch.id)}
         />
       )}
     </main>
@@ -205,6 +227,7 @@ function Workbench({
   onDismissNotice,
   onSelectJob,
   onRun,
+  onDelete,
 }: {
   batch: GenerationBatch;
   jobs: GenerationJob[];
@@ -217,9 +240,15 @@ function Workbench({
   onDismissNotice(): void;
   onSelectJob(id: string): void;
   onRun(): void;
+  onDelete(): void;
 }) {
   const store = useNovelStore(),
     novel = useNovelStore((s) => s.novels.find((item) => item.id === batch.novelId)),
+    autoReview =
+      useNovelStore((s) => s.autoReview[batch.novelId]) ?? {
+        enabled: false,
+        message: "",
+      },
     progress = batchProgress(jobs),
     failedCount = jobs.filter((item) => item.status === "failed").length,
     nextQueued = jobs
@@ -269,7 +298,9 @@ function Workbench({
                   : "继续"}
             </button>
           )}
-          {(batch.status === "running" || batch.status === "paused") && (
+          {(batch.status === "running" ||
+            batch.status === "paused" ||
+            batch.status === "queued") && (
             <button
               className="secondary danger"
               onClick={() => store.setBatchStatus(batch.id, "cancelled")}
@@ -285,8 +316,46 @@ function Workbench({
               <RotateCcw size={15} /> 重试失败（{failedCount}）
             </button>
           )}
+          {(batch.status === "completed" || batch.status === "cancelled") && (
+            <button
+              className="secondary danger"
+              title="删除本批次的任务记录与活动日志；已入正史的章节不受影响"
+              onClick={onDelete}
+            >
+              <Trash2 size={14} /> 删除记录
+            </button>
+          )}
+          <button
+            className={`secondary auto-review-toggle${autoReview.enabled ? " on" : ""}`}
+            title={
+              autoReview.enabled
+                ? "停止自动接受；当前章节可回到人工审阅"
+                : "开启后：每章候选稿与全部正史建议自动接受，自动继续写下一章，直到本批完成或连续失败自动停止"
+            }
+            onClick={() =>
+              store.setAutoReview(
+                batch.novelId,
+                !autoReview.enabled,
+                autoReview.enabled
+                  ? ""
+                  : "已开启：候选稿与正史建议将自动接受，并连续创作至本批完成。",
+              )
+            }
+          >
+            <Bot size={15} />
+            {autoReview.enabled ? "自动创作中·点击停止" : "自动接受并连续创作"}
+          </button>
         </div>
       </header>
+      {autoReview.enabled && (
+        <div className="auto-review-banner" role="status">
+          <Bot size={15} />
+          <span>
+            {autoReview.message ||
+              "自动接受已开启：每章候选稿与正史建议将自动确认，并连续创作至本批完成。"}
+          </span>
+        </div>
+      )}
       {notice && (
         <div className="workbench-notice">
           <AlertTriangle size={15} />
@@ -459,6 +528,22 @@ function ChapterPane({
       setBusyAction("");
     }
   }
+  async function acceptAllProposals() {
+    if (!candidate) return;
+    const pending = proposals.filter((item) => item.status === "proposed");
+    if (!pending.length) return;
+    setBusyAction("accept-all");
+    setError("");
+    try {
+      for (const proposal of pending)
+        await store.reviewFactProposal(candidate.id, proposal.id, true);
+      setFlash(`已接受 ${pending.length} 条正史建议。`);
+    } catch (value) {
+      setError(value instanceof Error ? value.message : "批量接受失败");
+    } finally {
+      setBusyAction("");
+    }
+  }
   if (job.status === "failed")
     return (
       <div className="reader-state">
@@ -607,7 +692,32 @@ function ChapterPane({
       )}
       {proposals.length > 0 && (
         <div className="proposal-list">
-          <h4>AI 正史建议（接受候选稿后可写入）</h4>
+          <h4>
+            AI 正史建议（接受候选稿后可写入）
+            {candidate.status === "accepted" &&
+              proposals.some((item) => item.status === "proposed") && (
+                <button
+                  className="accept-all"
+                  disabled={busyAction !== ""}
+                  onClick={() => void acceptAllProposals()}
+                >
+                  {busyAction === "accept-all" ? (
+                    <Loader2 size={14} className="spin" />
+                  ) : (
+                    <Check size={14} />
+                  )}
+                  {busyAction === "accept-all"
+                    ? "写入中…"
+                    : `全部接受（${proposals.filter((item) => item.status === "proposed").length}）`}
+                </button>
+              )}
+          </h4>
+          {candidate.status !== "accepted" &&
+            proposals.some((item) => item.status === "proposed") && (
+              <p className="proposal-hint">
+                先点击上方「接受并写入正文」接受本章候选稿，这些“接受并写入正史”按钮才会解锁。
+              </p>
+            )}
           {proposals.map((proposal) => (
             <div key={proposal.id}>
               <span>{FACT_KIND_LABELS[proposal.kind]}</span>
@@ -678,7 +788,7 @@ const EVENT_LEVEL_CLASS: Record<GenerationEvent["level"], string> = {
 };
 
 function ActivityLog({ batchId, novelId }: { batchId: string; novelId: string }) {
-  const events = useNovelStore((s) => s.activityEvents[batchId] ?? []),
+  const events = useNovelStore((s) => s.activityEvents[batchId] ?? EMPTY_EVENTS),
     listRef = useRef<HTMLUListElement>(null);
   useEffect(() => {
     const list = listRef.current;

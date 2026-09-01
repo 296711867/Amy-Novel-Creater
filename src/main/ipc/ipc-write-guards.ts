@@ -108,6 +108,20 @@ export const IPC_WRITE_GUARDS: Record<string, ArgumentGuard[]> = {
     id(),
     oneOf(["accepted", "rejected"] as const),
   ],
+  [IPC_CHANNELS.saveGlobalFindings]: [
+    id(),
+    arr(
+      obj({
+        id: str(),
+        severity: oneOf(["error", "warning", "info"] as const),
+        category: str(),
+        message: str(),
+        status: oneOf(["open", "dismissed"] as const),
+      }),
+    ),
+  ],
+  [IPC_CHANNELS.reviewGlobalConsistency]: [id()],
+  [IPC_CHANNELS.reviewWholeBook]: [id(), optional(num({ min: 1, int: true }))],
   [IPC_CHANNELS.createWorkflowRun]: [
     obj({
       novelId: id(),
@@ -202,6 +216,7 @@ export const IPC_WRITE_GUARDS: Record<string, ArgumentGuard[]> = {
     }),
   ],
   [IPC_CHANNELS.setBatchStatus]: [id(), oneOf(batchStatuses), optional(obj({}))],
+  [IPC_CHANNELS.deleteGenerationBatch]: [id()],
   [IPC_CHANNELS.updateGenerationJob]: [
     id(),
     oneOf(jobStatuses),

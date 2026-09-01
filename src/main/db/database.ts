@@ -23,6 +23,11 @@ import {
 import { createPlanningProposalsRepository } from "./repositories/planning-proposals";
 import { createStyleTemplatesRepository } from "./repositories/style-templates";
 import { createWorkflowRunsRepository } from "./repositories/workflow-runs";
+import {
+  createGlobalFindingsRepository,
+  type GlobalFindingsRepository,
+} from "./repositories/global-findings";
+import type { GlobalFinding } from "@domain/global-consistency";
 
 /**
  * Thin facade over the domain repositories. Public API signatures must stay
@@ -44,6 +49,7 @@ export class NovelDatabase {
   private readonly planningProposals;
   private readonly styleTemplates;
   private readonly workflowRuns;
+  private readonly globalFindings: GlobalFindingsRepository;
 
   private constructor(private readonly client: Client) {
     this.novels = createNovelsRepository(client);
@@ -61,6 +67,7 @@ export class NovelDatabase {
     this.planningProposals = createPlanningProposalsRepository(client);
     this.styleTemplates = createStyleTemplatesRepository(client);
     this.workflowRuns = createWorkflowRunsRepository(client);
+    this.globalFindings = createGlobalFindingsRepository(client);
   }
 
   static async open(path: string): Promise<NovelDatabase> {
@@ -150,6 +157,15 @@ export class NovelDatabase {
   }
   listPlanningProposals(novelId: string) {
     return this.planningProposals.list(novelId);
+  }
+  listGlobalFindings(novelId: string): Promise<GlobalFinding[]> {
+    return this.globalFindings.list(novelId);
+  }
+  saveGlobalFindings(
+    novelId: string,
+    findings: GlobalFinding[],
+  ): Promise<GlobalFinding[]> {
+    return this.globalFindings.replace(novelId, findings);
   }
   replacePlanningProposals(
     ...args: Parameters<typeof this.planningProposals.replacePending>
@@ -347,6 +363,15 @@ export class NovelDatabase {
   }
   listGenerationBatches() {
     return this.generation.listGenerationBatches();
+  }
+  async deleteGenerationBatch(id: string) {
+    // AN-029：只允许清理已完结的批次记录；进行中/等待审核的批次先停止再删，
+    // 防止误删运行中的任务与待审正史链。
+    const batch = await this.generation.getGenerationBatch(id);
+    if (!batch) throw new Error("Batch not found");
+    if (batch.status !== "completed" && batch.status !== "cancelled")
+      throw new Error("仅已完成或已取消的批次可删除；请先停止该批次");
+    return this.generation.deleteGenerationBatch(id);
   }
   getGenerationBatch(id: string) {
     return this.generation.getGenerationBatch(id);

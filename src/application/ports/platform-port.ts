@@ -56,6 +56,7 @@ import type {
 import type { NovelProjectBundle } from "@domain/project-export";
 import type { ScopeAdvice } from "@domain/scope-advisor";
 import type { PlanningBrief } from "@domain/planning-workflow";
+import type { GlobalFinding } from "@domain/global-consistency";
 import type { DiagnosticReport } from "@domain/diagnostics";
 import type { NovelPlanSummary, PlanPhase, PlanRange } from "@domain/planning";
 import type { PlanningWorkflow } from "@domain/planning-workflow";
@@ -65,6 +66,7 @@ import type {
   SavePlanningCycleInput,
 } from "@domain/planning-cycle";
 import type {
+  NewPlanningProposal,
   PlanningProposal,
   PlanningProposalStatus,
 } from "@domain/planning-proposal";
@@ -128,6 +130,29 @@ export interface PlatformPort {
     proposalId: string,
     status: Exclude<PlanningProposalStatus, "pending">,
   ): Promise<PlanningProposal>;
+  /** AN-027 全局一致性：确定性发现与 AI 审查发现的统一存取。 */
+  listGlobalFindings(novelId: string): Promise<GlobalFinding[]>;
+  saveGlobalFindings(
+    novelId: string,
+    findings: GlobalFinding[],
+  ): Promise<GlobalFinding[]>;
+  /** AI 语义审查（每周期一次）：产出发现与设定修复提案，不直接改正史。 */
+  reviewGlobalConsistency(
+    novelId: string,
+  ): Promise<{
+    summary: string;
+    findings: GlobalFinding[];
+    proposals: NewPlanningProposal[];
+  }>;
+  /**
+   * AN-032：全书分窗口 AI 通读审稿（顺序窗口 + 滚动摘要），产出带章节
+   * 定位的发现（`book:` 前缀，source=ai），整体替换上一轮通读发现。
+   * 每窗口一次模型调用，受窗口预算约束并逐窗口留痕事件与用量。
+   */
+  reviewWholeBook(
+    novelId: string,
+    options?: { windowSize?: number },
+  ): Promise<{ windows: number; findings: GlobalFinding[] }>;
   createWorkflowRun(input: CreateWorkflowRunInput): Promise<WorkflowRun>;
   updateWorkflowRun(input: UpdateWorkflowRunInput): Promise<WorkflowRun>;
   listWorkflowRuns(novelId: string): Promise<WorkflowRun[]>;
@@ -228,6 +253,12 @@ export interface PlatformPort {
     status: GenerationBatch["status"],
     patch?: { awaitingReview?: boolean },
   ): Promise<GenerationBatch>;
+  /**
+   * AN-029：删除批次记录（任务队列与活动日志一并删除，已入正史的章节、
+   * 候选稿与用量统计不受影响）。仅允许删除已完成或已取消的批次，
+   * 进行中/等待审核的批次必须先停止。
+   */
+  deleteGenerationBatch(batchId: string): Promise<void>;
   updateGenerationJob(
     jobId: string,
     status: GenerationJobStatus,

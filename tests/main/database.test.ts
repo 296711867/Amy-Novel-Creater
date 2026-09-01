@@ -404,6 +404,26 @@ describe("NovelDatabase", () => {
     });
     const jobs = await database.listGenerationJobs(batchResult.id);
     expect(jobs).toHaveLength(2);
+    // AN-028 批次互斥：已有未完结批次时拒绝再建，避免自动审阅在批次间
+    // 来回跳、对已入正史章节重复排队。
+    await expect(
+      database.createGenerationBatch(created.novel.id, {
+        startChapter: 1,
+        endChapter: 2,
+        chapterWords: 2000,
+        continuityCheck: true,
+        maxRetries: 2,
+        approvalMode: "candidate",
+        outputTokenBudget: 10000,
+      }),
+    ).rejects.toThrow("已有进行中的批次");
+    // AN-023/AN-027：任务可携带审查修订要求，未设置时为 undefined。
+    await database.updateGenerationJob(jobs[0].id, "queued", {
+      revisionNotes: "修正位置跳变：沈灯应仍在雾灯港",
+    });
+    expect(
+      (await database.listGenerationJobs(batchResult.id))[0].revisionNotes,
+    ).toBe("修正位置跳变：沈灯应仍在雾灯港");
     const running = await database.updateGenerationJob(
       jobs[0].id,
       "generating",
@@ -416,6 +436,19 @@ describe("NovelDatabase", () => {
     expect(
       (await database.getGenerationBatch(batchResult.id))?.outputTokensUsed,
     ).toBe(1200);
+    // AN-029 批次记录删除：进行中/待审拒绝；取消后级联清理任务与活动日志。
+    await expect(
+      database.deleteGenerationBatch(batchResult.id),
+    ).rejects.toThrow("仅已完成或已取消");
+    await database.setBatchStatus(batchResult.id, "cancelled");
+    await database.deleteGenerationBatch(batchResult.id);
+    expect(await database.listGenerationJobs(batchResult.id)).toEqual([]);
+    expect(await database.listGenerationEvents(batchResult.id)).toEqual([]);
+    expect(
+      (await database.listGenerationBatches()).some(
+        (item) => item.id === batchResult.id,
+      ),
+    ).toBe(false);
     await database.deleteNovel(created.novel.id);
     expect(await database.listNovels()).toEqual([]);
     expect(await database.listChapters(created.novel.id)).toEqual([]);
@@ -579,5 +612,62 @@ describe("NovelDatabase", () => {
     // 删除小说时运行记录级联清理。
     await database!.deleteNovel(created.novel.id);
     expect(await database!.listWorkflowRuns(created.novel.id)).toEqual([]);
+  });
+
+  it("persists global findings across replace and cascade delete (AN-027)", async () => {
+    database = await NovelDatabase.open(":memory:");
+    const created = await database.createNovel({
+      title: "全局审查测试",
+      genre: "悬疑",
+      premise: "守灯人世界",
+      targetChapters: 2,
+      chapterWords: 2000,
+    });
+    const novelId = created.novel.id,
+      now = new Date().toISOString();
+    // global_findings 表随迁移创建，保存可选字段并按严重度排序返回。
+    await database.saveGlobalFindings(novelId, [
+      {
+        id: "ai:issue:x",
+        novelId,
+        source: "ai",
+        severity: "info",
+        category: "consistency",
+        message: "信息级发现",
+        evidence: "",
+        status: "open",
+        createdAt: now,
+      },
+      {
+        id: "rule:dangling-state:s1",
+        novelId,
+        source: "rule",
+        severity: "error",
+        category: "consistency",
+        message: "悬空状态",
+        evidence: "characterState s1",
+        suggestion: "删除或修复",
+        targetKind: "setting",
+        targetName: "沈灯",
+        chapterPosition: 3,
+        status: "open",
+        createdAt: now,
+      },
+    ]);
+    const findings = await database.listGlobalFindings(novelId);
+    expect(findings).toHaveLength(2);
+    expect(findings[0].severity).toBe("error");
+    expect(findings[0]).toMatchObject({
+      source: "rule",
+      suggestion: "删除或修复",
+      targetKind: "setting",
+      chapterPosition: 3,
+    });
+    expect(findings[1].id).toBe("ai:issue:x");
+    // 整体替换语义：清空后列表为空；删除小说时级联清理。
+    await database.saveGlobalFindings(novelId, []);
+    expect(await database.listGlobalFindings(novelId)).toEqual([]);
+    await database.deleteNovel(novelId);
+    expect(await database.listGlobalFindings(novelId)).toEqual([]);
   });
 });

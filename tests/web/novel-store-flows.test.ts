@@ -208,6 +208,18 @@ vi.mock("@renderer/platform/web-platform", () => ({
     listGenerationBatches: () => Promise.resolve(backend.batches.map((b) => ({ ...b }))),
     listGenerationJobs: (batchId: string) =>
       Promise.resolve(backend.jobs.filter((j) => j.batchId === batchId).map((j) => ({ ...j }))),
+    // 镜像 AN-029 平台门禁：仅已完成/已取消的批次可删除。
+    deleteGenerationBatch: (batchId: string) => {
+      const batch = backend.batches.find((b) => b.id === batchId);
+      if (!batch) return Promise.reject(new Error("Batch not found"));
+      if (batch.status !== "completed" && batch.status !== "cancelled")
+        return Promise.reject(
+          new Error("仅已完成或已取消的批次可删除；请先停止该批次"),
+        );
+      backend.batches = backend.batches.filter((b) => b.id !== batchId);
+      backend.jobs = backend.jobs.filter((j) => j.batchId !== batchId);
+      return Promise.resolve();
+    },
     startBackgroundBatch: (batchId: string) => {
       backend.calls.startBackgroundBatch.push(batchId);
       return Promise.resolve();
@@ -345,5 +357,44 @@ describe("Renderer 关键流程（store）", () => {
       status: "completed",
       awaitingReview: false,
     });
+  });
+
+  it("批次记录删除（AN-029）：进行中被门禁拒绝，已完结删除后列表与任务缓存清理", async () => {
+    // 造一条已完结的历史批次，不影响共享的 b1 运行态。
+    backend.batches.push({
+      ...backend.batches[0],
+      id: "b-old",
+      status: "completed",
+      awaitingReview: false,
+    });
+    backend.jobs.push({
+      ...backend.jobs[0],
+      id: "j-old",
+      batchId: "b-old",
+      status: "completed",
+    });
+    await store.getState().loadBatches();
+    await store.getState().loadJobs("b-old");
+    expect(store.getState().jobs["b-old"]).toHaveLength(1);
+
+    // 运行中的批次删除被平台门禁拒绝，store 状态不变。
+    await expect(store.getState().deleteBatch("b1")).rejects.toThrow(
+      "仅已完成或已取消",
+    );
+    expect(store.getState().batches).toHaveLength(2);
+
+    // 已完结批次删除后：列表移除、任务缓存清理，其余批次不受影响。
+    await store.getState().deleteBatch("b-old");
+    expect(
+      store.getState().batches.some((item) => item.id === "b-old"),
+    ).toBe(false);
+    expect(store.getState().jobs["b-old"]).toBeUndefined();
+    expect(
+      store.getState().batches.some((item) => item.id === "b1"),
+    ).toBe(true);
+
+    // 恢复共享后台状态，保证用例独立。
+    backend.batches = backend.batches.filter((item) => item.id !== "b-old");
+    backend.jobs = backend.jobs.filter((item) => item.batchId !== "b-old");
   });
 });

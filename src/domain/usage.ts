@@ -8,7 +8,8 @@ export interface UsageRecord {
     | "generation"
     | "continuity_check"
     | "chapter_review"
-    | "planning";
+    | "planning"
+    | "global_review";
   provider: string;
   model: string;
   inputTokens: number;

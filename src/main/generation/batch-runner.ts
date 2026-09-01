@@ -390,6 +390,7 @@ export class BatchRunner {
         inputBudget: Math.max(4000, profile.contextWindow - output),
         outputTokensReserved: output,
         namePoolHint: pool.usedNames.length ? namePoolText(pool) : undefined,
+        revisionNotes: job.revisionNotes,
       });
       await this.database.saveContextSnapshot(current.novelId, pack);
       await this.emit({

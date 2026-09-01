@@ -43,6 +43,8 @@ const MIGRATIONS: string[] = [
   `CREATE INDEX IF NOT EXISTS generation_events_batch_time ON generation_events(batch_id, created_at)`,
   `CREATE TABLE IF NOT EXISTS workflow_runs (id TEXT PRIMARY KEY, novel_id TEXT NOT NULL REFERENCES novels(id) ON DELETE CASCADE, mode TEXT NOT NULL, current_phase TEXT NOT NULL, status TEXT NOT NULL, checkpoint TEXT, config_json TEXT NOT NULL, attempt INTEGER NOT NULL DEFAULT 0, batch_id TEXT, error TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
   `CREATE INDEX IF NOT EXISTS workflow_runs_novel_time ON workflow_runs(novel_id, created_at DESC)`,
+  `CREATE TABLE IF NOT EXISTS global_findings (id TEXT PRIMARY KEY, novel_id TEXT NOT NULL REFERENCES novels(id) ON DELETE CASCADE, source TEXT NOT NULL, severity TEXT NOT NULL, category TEXT NOT NULL, message TEXT NOT NULL, evidence TEXT NOT NULL DEFAULT '', suggestion TEXT, target_kind TEXT, target_name TEXT, chapter_position INTEGER, status TEXT NOT NULL DEFAULT 'open', created_at TEXT NOT NULL)`,
+  `CREATE INDEX IF NOT EXISTS global_findings_novel_status ON global_findings(novel_id, status, severity)`,
 ];
 
 export async function runMigrations(client: Client): Promise<void> {
@@ -70,6 +72,9 @@ export async function runMigrations(client: Client): Promise<void> {
     await client.execute(
       `ALTER TABLE generation_batches ADD COLUMN awaiting_review INTEGER NOT NULL DEFAULT 0`,
     );
+  const jobColumns = await client.execute(`PRAGMA table_info(generation_jobs)`);
+  if (!jobColumns.rows.some((row) => String(row.name) === "revision_notes"))
+    await client.execute(`ALTER TABLE generation_jobs ADD COLUMN revision_notes TEXT`);
   const planningRunColumns = await client.execute(
     `PRAGMA table_info(planning_runs)`,
   );

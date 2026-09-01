@@ -56,3 +56,13 @@
 .autopilot-actions{justify-content:flex-start;margin-top:16px}
 .autopilot-state{display:inline-flex;align-items:center;gap:7px;color:var(--accent);font-weight:700;font-size:13px}
 @media(max-width:680px){.autopilot-modes{grid-template-columns:1fr}}
+/* AN-035 全自动巡航卡片 */
+.cruise-card{border:1px solid var(--accent);border-radius:14px;padding:18px;margin-bottom:16px;background:var(--surface)}
+.cruise-card h3{margin:0 0 8px;display:flex;align-items:center;gap:8px}
+.cruise-status{border-radius:10px;padding:10px 12px;background:var(--muted);line-height:1.6;margin:0 0 12px}
+.cruise-status b{display:inline-block;margin-right:8px;padding:2px 8px;border-radius:99px;font-size:12px;color:#fff;background:var(--accent)}
+.cruise-status[data-status="paused"] b{background:#c0392b}
+.cruise-card small{display:block;color:var(--sub);line-height:1.6;margin-top:10px}
+.cruise-form{display:flex;gap:12px;align-items:end;flex-wrap:wrap;margin-top:6px}
+.cruise-form label{display:grid;gap:5px;font-size:12px;font-weight:700}
+.cruise-form input{width:120px;border:1px solid var(--border);background:var(--muted);border-radius:9px;padding:9px 11px;outline:0}

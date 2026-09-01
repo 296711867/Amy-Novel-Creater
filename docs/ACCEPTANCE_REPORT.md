@@ -419,3 +419,277 @@ Electron 端同一链路经 IPC 镜像 novel-ipc 处理器，解析与过滤规�
 
 发布边界：安装包未签名（SmartScreen 提示）、无自动更新（AN-015 待证书与发布渠道）；
 gh CLI 不可用，安装包未附到 GitHub Release 附件，需要时经网页端手动上传。
+
+## 2026-08-31 AN-025 规划页白屏修复（发布后用户实测反馈）
+
+**现象与复现**：用户在 Electron 端点击作品卡片进入十步规划页后整窗白屏。
+在 dev 渲染端（Web 平台、全新 IndexedDB）复现同一现象：新建小说自动跳转
+`/novels/:id/plan` 后 `#root` 为空。页面级错误收集器捕获渲染异常
+"Uncaught Error: Maximum update depth exceeded"，堆栈位于
+`forceStoreRerender ← updateStoreInstance`（`useSyncExternalStore` 提交期快照检查）。
+
+**根因**：zustand v5 的 `useNovelStore(selector)` 直接落在 React
+`useSyncExternalStore` 上，selector 兜底写作 `?? []` 时，键不存在的分支每次
+调用都返回新数组引用，React 判定快照变化强制重渲染，形成无限循环直至抛错，
+React 卸载整棵组件树（入口无 ErrorBoundary，表现为全窗白屏）。共三处：
+`PlanningWorkflowPage`（activityEvents，挂载必触发，与用户点击即白屏吻合）、
+`App.tsx` GeneratePage（planningCycles）、`BatchesPage` ActivityLog
+（activityEvents）。与 AN-010 修复的 PersonaPanel 属同一类写法漏洞。
+
+**修复**：
+
+- 三处兜底改为模块级稳定常量（`EMPTY_LIST` / `EMPTY_EVENTS`）；
+- `main.tsx` 在 `HashRouter` 外层增加全局 `ErrorBoundary`（`crash-screen`
+  样式），任何页面级渲染异常展示可恢复错误页（返回首页 / 重新加载）而非白屏；
+- `DEVELOPMENT_GUIDE.md` §6 新增 Renderer selector 稳定引用硬规则、§7
+  记录崩溃兜底约定，防止同类写法第三次引入。
+
+**验证**：
+
+- 回归测试 `tests/web/planning-workflow-mount.test.tsx`：空数据状态（store
+  各分桶无该 novelId 键）整页挂载 `PlanningWorkflowPage`。双向验证——临时
+  还原旧 `?? []` 写法时测试失败，恢复修复后通过；
+- `pnpm check` 通过：typecheck（node+web）与 34 个测试文件 148 项测试通过
+  （E2E 真实 API 套件按默认跳过）；
+- 浏览器端到端复验：dev 渲染端完整重载后直接访问规划页 URL 与
+  “首页 → 点击作品卡片”两条路径均正常渲染（侧边栏在位、向导显示
+  “第 1 / 10 步”、作品标题正确），截图留档。
+- Electron 桌面端与 Web 端共用同一渲染层代码与 store，该修复双端生效；
+  用户原始 SQLite 数据不受影响（崩溃纯为渲染层问题，无数据写入路径参与）。
+
+## 2026-08-31 AN-026 审阅界面可用性修复与自动接受连续创作
+
+**用户反馈**：生成工作台里“接受并写入正史”按钮点击无反应；希望有“全部接受”
+按钮和全自动流程——AI 自动生成、自动批准正史建议、继续下一章，可指定一次性
+创作章数。
+
+**分析结论**：按钮并非失效——按 AN-003 正史门禁，事实建议按钮在章节候选稿被
+接受前本就禁用（`disabled={candidate.status !== "accepted"}`），但新工作台布局
+没有继承 `.review-drawer` 作用域的禁用样式，禁用按钮看起来完全正常，且界面上
+没有说明“先接受候选稿”这一前置步骤。逐章人工审阅需要 7 次以上点击（接受候选稿
+→ 逐条接受建议 → 继续下一章），是真实的效率痛点。
+
+**实现**（AN-026，作者委托审阅，默认关闭）：
+
+- 建议列表：禁用按钮加可见禁用样式；候选稿未接受时显示解锁提示条；新增
+  “全部接受（N）”按钮批量接受待审建议；
+- store 新增 `setAutoReview` / `tickAutoReview`：2 秒轮询，按“接受候选稿 →
+  接受全部正史建议 → 恢复批次写下一章”顺序推进，全部走既有
+  `reviewCandidate` / `reviewFactProposal` 正史门禁（`source=ai_candidate`）；
+- 安全边界：未解决的 error 级 findings 阻断自动接受并交还人工；批次完成、
+  候选稿被拒、连续 3 轮失败三种情况自动关闭并提示；每次自动动作写
+  `auto_review` 阶段事件留痕；开关不持久化，重启默认关闭；
+- 入口：生成工作台顶栏开关（随时开/停）+ 生成配置页“全自动连续创作”开关
+  （创建任务即开启）；一次性章数沿用任务章节范围与 Token 硬预算；
+- 运行语义文档化到 `AUTOPILOT_WORKFLOW.md` §6.2，明确与 Workflow Runner 的
+  分工及未实现项（字数 90% 门槛留待 AN-023 联动）。
+
+**验证**：
+
+- `tests/web/auto-review.test.ts`（5 项）：完整循环（接受候选稿不越权先写建议 →
+  全部建议 ai_candidate 写入且任务收敛 → 自动恢复下一章 → 完成后自动关闭，
+  `startBackgroundBatch` 恰好一次）、质量门（error findings 阻断）、连续失败
+  3 次自停且不再重试、人工拒绝让位、开关状态同步；
+- `tests/web/auto-review-ui.test.tsx`（3 项）：真实组件 + 真实 store——候选稿
+  未接受时按钮锁定且有提示条、开关点击切换 store 状态、“全部接受”批量写入；
+- `pnpm check` 通过：typecheck（node+web）与 36 个测试文件 155 项测试通过；
+- 浏览器端确认渲染端正常加载新代码（用户创作数据在 Electron SQLite 端，
+  未触碰；双端共用同一渲染层）。
+
+
+
+## 2026-09-01 AN-027 全局一致性审查 harness
+
+**背景**：用户提出——自动化完成每章后，章节与建议内容合并进正史时，应再对全局
+的人物、道具、剧情等做一轮审核，发现问题再修一波。既有检查全部是单章视角，
+累积正史之间（位置跳变、道具重复、伏笔超期、引用悬空）无任何校验环节。
+
+**实现**（三层）：
+
+- ① 确定性校验器 `domain/global-consistency.ts`（零 token）：悬空引用
+  （状态/时间线/伏笔指向不存在的人物或章节，error）、位置跳变无时间线解释
+  （warning）、道具重复持有、伏笔超期（阈值 30 章）、名称/别名冲突、停用实体
+  仍有最新状态。每条正史建议接受后增量跑一次；封存周期前 `finishCycle` 全量跑，
+  error 级发现阻断封存；同一校验也接入 AN-026 自动接受的全局质量门
+  （`collectGlobalErrors`）。
+- ② AI 语义审查 `reviewGlobalConsistency`（PlatformPort 新增，Web/Electron 双端）：
+  按 Context Pack 预算装配全局审查包（圣经/实体/时间线/伏笔/状态/近两章正文），
+  产出 summary + issues + 修复提案；发现落 `global_findings` 表（rule/ai 双来源，
+  “忽略”状态跨轮延续，rule 每轮刷新）；提案走 `planning_proposals`
+  （cycleId=global-review）人工审核，不直接改正史；双端均留痕 usage 与
+  generation 事件，模型错误可读不静默。
+- ③ 审查反馈重写：全局发现 →「按反馈重写第 N 章」→ `regenerateGenerationJob(
+  revisionNotes)`，任务与批次链路携带修订要求（generation_jobs 新列
+  revision_notes + 双端读写），重写上下文注入优先级 99 的「审查修订要求」源。
+
+**验证**：
+
+- `tests/domain/global-consistency.test.ts` 12 项：每条规则一正一反 + finding id
+  唯一不变量 + AI 解析去重；
+- `tests/web/global-review-chain.test.ts`：真实 webPlatform + stub fetch 全链路
+  （装配→调用→解析→入库去重→提案落 planning_proposals→忽略延续）；
+- `tests/contract/platform-port.contract.ts` 双端（Electron SQLite + Web
+  IndexedDB）16 项含 findings 往返；`tests/main/database.test.ts` 覆盖
+  global_findings 迁移与 revisionNotes 留痕；
+- `tests/web/auto-review.test.ts` 全局门用例（悬空 error 阻断自动接受）；
+- `pnpm check` 通过（177 项测试）；UI：连续性页新增「全局审查」视图（发现
+  分级、忽略、按反馈重写、修复提案审核）。真实模型审查效果待专项评估。
+
+## 2026-09-01 AN-028 全自动连续创作两次停摆修复（真实数据回放定位）
+
+**用户反馈**：全自动连跑再次卡住，自动进行不下去。
+
+**定位**（只读检查用户 SQLite 副本 + 主进程日志，未改动用户数据）：
+
+- 第一次停摆：自动审阅开关只存内存，开发环境重启（渲染层重载）后静默丢失，
+  批次停在 awaiting review 无人推进；用户误以为卡死，在配置页又建了一个
+  1–3 章新批次（永久 queued 的“幽灵批次”）。
+- 第二次停摆（18:56:40，精确到毫秒）：第 3 章 6 条建议中前 2 条接受后，第
+  3 条是圣经外新角色「平顺镖局遗女」的状态建议，`reviewFactProposal` 直接抛
+  “未找到角色”，2 秒重试 ×3 触发 AN-026 的连续失败自停——自动模式带着报错
+  关闭，剩余 4 条建议永久挂起。
+- 连带发现（主进程日志）：`saveGlobalFindings` 反复
+  `SQLITE_CONSTRAINT_PRIMARYKEY: UNIQUE constraint failed: global_findings.id`。
+  用用户库导出数据回放 `checkGlobalConsistency` 复现：别名冲突规则对共享
+  多个名称的同一组实体逐键产出同 id（前进系统 vs 系统（…执行体）/萧衔烛，×3/×2），
+  DELETE+INSERT 整批回滚，校验结果从落不了库（错误又被 `.catch` 吞掉，表面无感）。
+
+**实现**：
+
+- 开关持久化：`amy-novel:auto-review`（localStorage），store 启动重挂载断点续跑；
+  自动停用同步清除，重启不复活已停用模式；
+- 新角色自动建档：自动路径对圣经外角色的 character_state 建议先建最小实体卡
+  （summary 注明自动建档与首出章节）再写状态；人工路径保持原报错不悄悄扩员；
+- tick 逐条容错：单条失败不阻断整批（活动日志注明待人工处理），全部失败才计
+  入连续失败；批次暂停/排队/生成中状态写入横幅（noteAutoReview，内容不变不
+  重渲染），消灭“开关亮着却毫无动静”的静默假死；
+- 批次互斥：同一作品同时只允许一个未完结批次（web-platform 在规划门禁之后、
+  Electron 在仓库层同规则同文案），排队批次可停止——幽灵批次可清理，杜绝
+  重复生成已入正史章节；
+- id 去重：别名冲突规则按实体组合并产出（evidence 列出全部冲突名称数）；
+  校验器输出与 `parseGlobalReview` 双重去重，附“任意输入 id 唯一”不变量测试。
+
+**验证**：
+
+- 用户库导出数据回放：修复前复现重复 id（×3/×2），修复后通过（临时用例已转
+  正式回归 `tests/domain/global-consistency.test.ts`）；
+- `tests/web/auto-review.test.ts` 11 项：新增自动建档双路径（人工仍拦截）、
+  部分失败不阻断 + 持续失败仍自停（提示指明建议名）、暂停/排队横幅、持久化
+  写入/清除；
+- `tests/main/database.test.ts`：批次互斥（未完结批次时拒绝再建，同文案）；
+- `pnpm check` 通过（177 项测试）；渲染层修复经 dev HMR 即时送达运行中的应用，
+  主进程互斥守卫随下次应用重启生效。用户数据零改动（全部只读检查 + 副本回放）。
+
+## 2026-09-01 AN-029 批次记录删除（历史任务清理）
+
+**用户反馈**：1–10 章批次完成后已切到 11–20，但批次切换器里残留多条旧的已取消/
+已完成任务（1–3 已取消、1–1 已完成、1–10 已取消），找不到删除入口。
+
+**实现**：
+
+- 新端口 `deleteGenerationBatch(batchId)`：Web 端清理 BATCHES_KEY 与对应
+  jobs/events 存储键；Electron 端仓库层单事务级联删除 generation_events、
+  generation_jobs、generation_batches；新增 IPC 通道 `generation:batches:delete`
+  （写守卫 id 校验）与 preload 桥接；
+- 双端同一状态门禁：仅 `completed` / `cancelled` 批次可删除，进行中/等待审核
+  的批次必须先停止（防止误删运行中任务与待审正史链）；已入正史的章节、候选稿
+  与用量统计不受影响；
+- store `deleteBatch`：调用端口后同步清理 batches 列表与 jobs 缓存；
+- UI：生成工作台对已完结批次显示「删除记录」按钮（危险色、悬停说明影响范围、
+  `window.confirm` 二次确认——与删除实体卡等既有破坏性操作一致）；删除当前
+  选中的批次后自动回退到最需关注的批次；
+- 顺带加固（AN-028 补充）：自动审阅 tick 检测“批次 running 但无任务在生成 /
+  任务卡 generating 超 5 分钟”（应用重启导致运行器丢失）时自动重新接管，
+  BatchRunner 单例守卫保证误判时空操作——重启应用后全自动模式可自愈续跑。
+
+**验证**：
+
+- `tests/contract`（Electron SQLite + Web IndexedDB 双端）：删除不存在批次的
+  错误语义一致（`Batch not found`）；
+- `tests/main/database.test.ts`：生命周期用例——进行中删除被拒（提示先停止）→
+  取消 → 删除后任务、活动日志、批次记录全部清空；
+- `tests/web/novel-store-flows.test.ts`：store 删除后列表与任务缓存同步清理、
+  运行中删除被拒不影响状态；
+- `tests/web/auto-review.test.ts`：运行器丢失接管三场景（无任务生成→接管、
+  卡 generating 超 5 分钟→接管、正常生成中→仅报状态不抢跑）；
+- `pnpm check` 通过（181 项测试）。
+
+## 2026-09-02 AN-030~034 全局整体查看与整体微调
+
+**用户需求**：1–20 章完成后，希望有全局整体查看+整体微调的入口，“害怕有些细节
+没有把控到”。数据实证：伏笔 84 条未回收 82、人物状态存在同章重复与矛盾
+（第 1 章 28 岁 vs 24 岁两份主角档案）、142 条 AI 建议全部自动接受零人工过目。
+
+**实现**（按“看得见 → 调得动 → 深度体检”分层）：
+
+- **AN-030 故事总览**（`domain/story-overview.ts`，零 token）：连续性页新增默认
+  首视图——统计卡片（章/字数/人物/时间线/伏笔含超期/状态）、人物出场表（首末
+  章、活跃章、最新状态）、道具流转链、伏笔进度（年龄+超期标记）、各章摘要行；
+  左栏记忆体检问题清单可跳转对应台账；
+- **AN-033 记忆清理**：duplicate-state 一键“保留一条删重复”（给出一键清单）；
+  multi-state-chapter 提示人工核对矛盾；伏笔进度表勾选批量废弃（abandoned）或
+  批量删除（confirm 二次确认）；
+- **AN-031 整书连读**：新 BookReaderPage（/novels/:id/book），目录锚点 + 连续
+  滚动连读；每章“标记疑点”写入 global_findings（source=author）。三处合并逻辑
+  （store 规则校验、web/electron AI 审查）保留 author 记录；
+- **AN-032 全书分窗口 AI 通读审稿**：`whole-book-review` 域（窗口切分/滚动摘要
+  prompt/解析去重）+ `whole-book-review-runner` Application 编排（双端共享：逐
+  窗口事件与用量留痕、book:* 发现整体替换、跨窗重复 id 去重、忽略延续、
+  author/rule 保留）+ `reviewWholeBook` 端口（Web/Electron 薄壳）+ 审查页按钮
+  （费用确认 + 逐窗口进度事件）；
+- **AN-034 全局微调**：连读页“全局修订”面板——全书确定性查找（命中章节列表 +
+  上下文预览高亮）→ 逐章 confirm 替换 → saveChapter 创建版本快照（origin=manual，
+  写作台可回滚）；空词拒绝、单字允许、同词不执行、替换为空即删除。
+
+**验证**：
+
+- `tests/domain/story-overview.test.ts` 8 项（聚合与体检，含线上事故形态复现）；
+- `tests/domain/revision.test.ts` 5 项；`tests/domain/whole-book-review.test.ts`
+  7 项（窗口/预算裁剪/解析/速览）；
+- `tests/web/whole-book-review.test.ts` 3 项（真实 runner 编排：窗口顺序调用、
+  滚动摘要续读、逐窗口留痕、book:* 替换语义、跨窗去重、author/rule 保留、空书
+  错误）；
+- `tests/web/global-review-chain.test.ts`：规则与作者记录均不被 AI 审查清除；
+- `pnpm check` 通过：typecheck（node+web）+ 44 个测试文件 202 项测试；
+- 渲染层改动经 dev HMR 即时生效；主进程 IPC（reviewWholeBook 通道）随下次应用
+  重启生效。真实模型通读效果待用户实测评估。
+
+## 2026-09-02 AN-035 全自动巡航（跨周期无人值守连跑）
+
+**用户需求演进**：先提出"规划+正文合并的一个按钮、一直循环到目标章数"；经两轮
+方案分析定案为两段式模型——地基期沿用人工精控流程，信任建立后开启巡航。用户
+定案两个参数：① 不卡第一卷封存，十步向导完成即可开启；② 不设总预算上限，
+途中额度耗尽即停在原地、记录状态、修复后可续跑。
+
+**实现**：
+
+- `domain/workflow-cruise.ts`：CruiseState（enabled/status/targetChapter/
+  message）、draftClosingState（从时间线尾部+核心人物最新状态+未回收伏笔
+  确定性起草周期实际结束状态，零 token，≤480 字）、nextCycleRange（末段对齐
+  目标章数与章节目录）、cruisePolicy（沿用上一周期策略仅换范围）；
+- store `tickCruise`（3 秒轮询，复用 AN-026/028 基建模式）：
+  - 无运行 → 按已封存进度推起始周期，启动 autopilot 模式 Workflow Run；
+  - proposal_review 暂停 → 自动接受全部 pending 设定提案（作者委托语义，
+    与正文建议自动接受一致）并续跑；phase_review → 代点继续；chapter_review
+    → 交给自动接受（巡航联动确保其开启）；
+  - 运行失败 / 批次 Token 预算耗尽 / 全局校验 error / 连续 3 次失败 →
+    巡航转 paused 并记录原因，「继续巡航」从中断处一键续跑；
+  - 运行完成 → 等待范围内章节全部入正史 → 过 AN-027 全局校验门禁 →
+    自动封存（起草实际结束状态）→ 开下一周期运行；到达目标章数 → 收工
+    并关闭自动接受；
+  - 开关持久化 `amy-novel:cruise`，应用启动重挂载（paused 保持暂停）；
+- UI：规划页第 10 步「全自动巡航」卡片——目标章数输入（默认全书目标）、
+  开启二次确认（明示 AI 将自动接受设定与正文）、巡航状态与暂停原因、
+  继续巡航/停止按钮。
+
+**验证**：
+
+- `tests/domain/workflow-cruise.test.ts` 5 项：起草（含人物最新状态取舍、
+  已回收伏笔排除、空记忆与长度上限）、末段对齐目标/目录、到达目标返回
+  null、策略只换范围；
+- `tests/web/cruise.test.ts` 7 项（真实 store + 模拟平台驱动 tickCruise）：
+  无运行启动新周期（21–30，autopilot）并持久化开关、提案暂停点自动接受
+  并续跑、运行失败暂停、批次预算耗尽暂停、completed 后等待入正史（2/3
+  不封存）、全部入正史后自动封存并开下一周期（31–40）、到达目标收工
+  （巡航清除+自动接受关闭+localStorage 清理）；
+- `pnpm check` 通过（214 项测试）；真实模型多周期长跑效果待用户实测。

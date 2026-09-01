@@ -92,6 +92,7 @@ function jobFrom(row: DbRow): GenerationJob {
     inputTokens: Number(row.input_tokens),
     outputTokens: Number(row.output_tokens),
     error: String(row.error),
+    revisionNotes: row.revision_notes ? String(row.revision_notes) : undefined,
     updatedAt: String(row.updated_at),
   };
 }
@@ -268,6 +269,20 @@ export function createGenerationRepository(
     novelId: string,
     policy: GenerationPolicy,
   ): Promise<{ id: string; estimate: ReturnType<typeof estimateGeneration> }> {
+    // AN-028：同一作品同时只允许一个未完结批次。多批次并存时自动审阅会
+    // 在批次间来回跳，还会对已入正史的章节重复排队生成。
+    const existing = (await listGenerationBatches()).find(
+      (item) =>
+        item.novelId === novelId &&
+        item.status !== "completed" &&
+        item.status !== "cancelled",
+    );
+    if (existing)
+      throw new Error(
+        `已有进行中的批次（第 ${existing.policy.startChapter}–${existing.policy.endChapter} 章，${
+          existing.awaitingReview ? "等待审核" : `状态：${existing.status}`
+        }）。请先到生成工作台继续或停止该批次，再创建新任务。`,
+      );
     const id = nanoid(),
       now = new Date().toISOString(),
       chapterList = await chapters.listChapters(novelId),
@@ -284,7 +299,7 @@ export function createGenerationRepository(
           args: [id, novelId, "queued", JSON.stringify(policy), 0, now, now],
         },
         ...selected.map((chapter, index) => ({
-          sql: `INSERT INTO generation_jobs VALUES (?,?,?,?, 'queued',0,NULL,0,0,'',?)`,
+          sql: `INSERT INTO generation_jobs (id,batch_id,chapter_id,position,status,attempt,candidate_id,input_tokens,output_tokens,error,updated_at) VALUES (?,?,?,?,'queued',0,NULL,0,0,'',?)`,
           args: [nanoid(), id, chapter.id, index + 1, now],
         })),
       ],
@@ -352,6 +367,18 @@ export function createGenerationRepository(
     });
   }
 
+  /** AN-029：删除批次记录及其任务与活动日志；状态门禁由 database 层把关。 */
+  async function deleteGenerationBatch(id: string): Promise<void> {
+    await client.batch(
+      [
+        { sql: "DELETE FROM generation_events WHERE batch_id=?", args: [id] },
+        { sql: "DELETE FROM generation_jobs WHERE batch_id=?", args: [id] },
+        { sql: "DELETE FROM generation_batches WHERE id=?", args: [id] },
+      ],
+      "write",
+    );
+  }
+
   async function getJobByCandidate(
     candidateId: string,
   ): Promise<GenerationJob | null> {
@@ -407,7 +434,12 @@ export function createGenerationRepository(
     patch: Partial<
       Pick<
         GenerationJob,
-        "candidateId" | "inputTokens" | "outputTokens" | "error" | "attempt"
+        | "candidateId"
+        | "inputTokens"
+        | "outputTokens"
+        | "error"
+        | "attempt"
+        | "revisionNotes"
       >
     > = {},
   ): Promise<GenerationJob> {
@@ -424,7 +456,7 @@ export function createGenerationRepository(
         updatedAt: new Date().toISOString(),
       };
     await client.execute({
-      sql: "UPDATE generation_jobs SET status=?,attempt=?,candidate_id=?,input_tokens=?,output_tokens=?,error=?,updated_at=? WHERE id=?",
+      sql: "UPDATE generation_jobs SET status=?,attempt=?,candidate_id=?,input_tokens=?,output_tokens=?,error=?,revision_notes=?,updated_at=? WHERE id=?",
       args: [
         next.status,
         next.attempt,
@@ -432,6 +464,7 @@ export function createGenerationRepository(
         next.inputTokens,
         next.outputTokens,
         next.error,
+        next.revisionNotes ?? null,
         next.updatedAt,
         id,
       ],
@@ -585,6 +618,7 @@ export function createGenerationRepository(
     listGenerationJobs,
     recoverGenerationJobs,
     setBatchStatus,
+    deleteGenerationBatch,
     completeJobByCandidate,
     getJobByCandidate,
     saveGenerationEvent,

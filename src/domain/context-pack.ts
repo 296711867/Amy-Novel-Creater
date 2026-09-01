@@ -57,6 +57,8 @@ export interface ContextPackInput {
   promptOverrides?: PromptTemplateOverrides;
   /** 名称库提示（题材风格+示例名），约束模型给新人物起名的风格。 */
   namePoolHint?: string;
+  /** 审查驱动的修订要求（AN-023/AN-027）：按最新正史重写本章时注入。 */
+  revisionNotes?: string;
 }
 
 export function estimateTokens(text: string): number {
@@ -172,6 +174,18 @@ export function buildContextPack(input: ContextPackInput): ContextPack {
       required: true,
       text: `所属卷：${input.volume?.title ?? "未分卷"}\n卷目标：${input.volume?.outline ?? ""}\n章节大纲：${input.chapter.outline || "暂未填写"}\n场景：\n${input.scenes.map((s, i) => `${i + 1}. ${s.title}｜视角：${s.viewpoint || "未指定"}｜地点：${s.location || "未指定"}｜${s.summary}`).join("\n") || "暂未拆分场景"}`,
     },
+    ...(input.revisionNotes?.trim()
+      ? [
+          {
+            id: "revision-notes",
+            kind: "instruction" as const,
+            label: "审查修订要求",
+            priority: 99,
+            required: true,
+            text: `本章是按审查反馈重写的版本。上一版被审查出以下问题，重写时必须逐项解决，同时保持与正史一致：\n${input.revisionNotes.trim()}`,
+          },
+        ]
+      : []),
     ...input.bible.map((item, index) => ({
       id: item.id,
       kind: "bible" as const,

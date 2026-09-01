@@ -34,6 +34,10 @@ const port: ContractPort = {
   importNovelProject: (bundle) => database.importNovelProject(bundle),
   listStoryEntities: (novelId) => database.listStoryEntities(novelId),
   listPlanningProposals: (novelId) => database.listPlanningProposals(novelId),
+  listGlobalFindings: (novelId) => database.listGlobalFindings(novelId),
+  saveGlobalFindings: (novelId, findings) =>
+    database.saveGlobalFindings(novelId, findings),
+  deleteGenerationBatch: (batchId) => database.deleteGenerationBatch(batchId),
 };
 
 describe("Electron（NovelDatabase）", () => {

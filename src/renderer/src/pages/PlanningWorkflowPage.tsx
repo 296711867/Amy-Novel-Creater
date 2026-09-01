@@ -194,9 +194,14 @@ export function PlanningWorkflowPage(): React.JSX.Element {
   );
   const loadWorkflowRuns = useNovelStore((state) => state.loadWorkflowRuns);
   const startWorkflowRun = useNovelStore((state) => state.startWorkflowRun);
-  const resumeStoredWorkflow = useNovelStore(
+  const resumeWorkflowRun = useNovelStore(
     (state) => state.resumeWorkflowRun,
   );
+  const cruise = useNovelStore((state) => state.cruise[novelId]);
+  const startCruise = useNovelStore((state) => state.startCruise);
+  const stopCruise = useNovelStore((state) => state.stopCruise);
+  const resumeCruise = useNovelStore((state) => state.resumeCruise);
+  const [cruiseTarget, setCruiseTarget] = useState(novel?.targetChapters ?? 30);
   const reviewPlanningProposal = useNovelStore(
     (state) => state.reviewPlanningProposal,
   );
@@ -228,7 +233,7 @@ export function PlanningWorkflowPage(): React.JSX.Element {
     (state) => state.setPlanningMessage,
   );
   const planEvents = useNovelStore(
-    (state) => state.activityEvents[`planning:${novelId}`] ?? [],
+    (state) => state.activityEvents[`planning:${novelId}`] ?? EMPTY_LIST,
   );
   const loadActivity = useNovelStore((state) => state.loadActivity);
   const ensureActivityListener = useNovelStore(
@@ -487,7 +492,7 @@ export function PlanningWorkflowPage(): React.JSX.Element {
     setWorkflowBusy(true);
     try {
       if (resume && latestWorkflowRun)
-        await resumeStoredWorkflow(latestWorkflowRun.id);
+        await resumeWorkflowRun(latestWorkflowRun.id);
       else
         await startWorkflowRun(novel.id, workflowMode, {
           startChapter: currentRange.startChapter,
@@ -561,6 +566,17 @@ export function PlanningWorkflowPage(): React.JSX.Element {
     if (!currentCycle || !rangeAccepted || !closingState.trim()) return;
     setPlanningMessage(novelId, "");
     try {
+      // AN-027 封存门禁：本批记忆将成为下一批的开场正史，先过全局校验。
+      const globalErrors = await useNovelStore
+        .getState()
+        .collectGlobalErrors(novelId);
+      if (globalErrors.length) {
+        setPlanningMessage(
+          novelId,
+          `全局一致性校验发现 ${globalErrors.length} 项 error（例如：${globalErrors[0]}）。请到「连续性」页处理后再封存本批。`,
+        );
+        return;
+      }
       await savePlanningCycle({
         ...currentCycle,
         status: "completed",
@@ -1016,6 +1032,86 @@ export function PlanningWorkflowPage(): React.JSX.Element {
 
           {activeStep === 10 && (
             <>
+              <div className="workflow-card cruise-card">
+                <h3>全自动巡航</h3>
+                {cruise?.enabled ? (
+                  <>
+                    <p className="cruise-status" data-status={cruise.status}>
+                      <b>{cruise.status === "active" ? "巡航中" : "已暂停"}</b>
+                      {cruise.message}
+                    </p>
+                    <div className="workflow-actions">
+                      {cruise.status === "paused" && (
+                        <button
+                          className="primary"
+                          onClick={() => resumeCruise(novelId)}
+                        >
+                          继续巡航（从中断处续跑）
+                        </button>
+                      )}
+                      <button
+                        className="secondary"
+                        onClick={() =>
+                          stopCruise(novelId, "巡航已手动停止，自动接受一并收工。")
+                        }
+                      >
+                        停止巡航
+                      </button>
+                    </div>
+                    <small>
+                      停止条件：到达目标章数 / 运行报错 / 批次 Token 预算耗尽 /
+                      全局校验出现 error。暂停原因会记录在上面的状态里，
+                      处理后点「继续巡航」即可；中途关闭应用，重启后自动续跑。
+                    </small>
+                  </>
+                ) : (
+                  <>
+                    <p>
+                      一个按钮循环跑到目标章数：周期规划（设定提案自动接受）→
+                      正文连写与正史建议自动接受 → 封存（实际结束状态自动起草）→
+                      下一周期。全程留痕，事后可用故事总览/整书连读回看审计。
+                    </p>
+                    <div className="cruise-form">
+                      <label>
+                        巡航到第几章
+                        <input
+                          type="number"
+                          min={1}
+                          max={novel?.targetChapters ?? 999}
+                          value={cruiseTarget}
+                          onChange={(event) =>
+                            setCruiseTarget(Number(event.target.value) || 0)
+                          }
+                        />
+                      </label>
+                      <button
+                        className="primary"
+                        disabled={!novel || cruiseTarget < 1}
+                        onClick={() => {
+                          if (!novel) return;
+                          const target = Math.min(
+                            cruiseTarget,
+                            novel.targetChapters,
+                          );
+                          if (
+                            !window.confirm(
+                              `开启全自动巡航：从当前进度连跑到第 ${target} 章。期间设定提案与正文候选将由 AI 自动接受（写入正史），只在出错、批次 Token 预算耗尽或全局校验异常时暂停。确定开始吗？`,
+                            )
+                          )
+                            return;
+                          setCruiseTarget(target);
+                          startCruise(novelId, target);
+                        }}
+                      >
+                        开启巡航
+                      </button>
+                    </div>
+                    <small>
+                      建议先跑完一卷人工确认质量后再开；十步向导完成后即可使用。
+                    </small>
+                  </>
+                )}
+              </div>
               <div className="workflow-card autopilot-card">
                 <h3>Autopilot 自动运行</h3>
                 <p>

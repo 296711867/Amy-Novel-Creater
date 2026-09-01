@@ -34,6 +34,7 @@ import { useNovelStore } from "./store/novel-store";
 import { WriterPage } from "./pages/WriterPage";
 import { BiblePage } from "./pages/BiblePage";
 import { ContinuityPage } from "./pages/ContinuityPage";
+import { BookReaderPage } from "./pages/BookReaderPage";
 import { StructurePage } from "./pages/StructurePage";
 import { ContextPage } from "./pages/ContextPage";
 import { UsagePage } from "./pages/UsagePage";
@@ -47,6 +48,9 @@ import "./novel-actions.css";
 import "./new-novel.css";
 
 const genres = ["玄幻", "都市", "科幻", "悬疑", "言情", "历史", "奇幻", "其他"];
+
+/** selector 兜底必须用稳定引用：每次返回新数组会触发 useSyncExternalStore 无限重渲染。 */
+const EMPTY_LIST: never[] = [];
 
 function Sidebar(): React.JSX.Element {
   const links = [
@@ -567,13 +571,15 @@ function GeneratePage(): React.JSX.Element {
   const createDraft = useNovelStore((s) => s.createGenerationDraft);
   const workflow = useNovelStore((s) => s.planningWorkflows[novelId]);
   const loadPlanningWorkflow = useNovelStore((s) => s.loadPlanningWorkflow);
-  const cycles = useNovelStore((s) => s.planningCycles[novelId] ?? []);
+  const cycles = useNovelStore((s) => s.planningCycles[novelId] ?? EMPTY_LIST);
   const loadPlanningCycles = useNovelStore((s) => s.loadPlanningCycles);
   const styleTemplates = useNovelStore((s) => s.styleTemplates);
   const loadStyleTemplates = useNovelStore((s) => s.loadStyleTemplates);
   const modelProfiles = useNovelStore((s) => s.modelProfiles);
   const loadModelProfiles = useNovelStore((s) => s.loadModelProfiles);
+  const setAutoReview = useNovelStore((s) => s.setAutoReview);
   const [submitError, setSubmitError] = useState("");
+  const [autoCreate, setAutoCreate] = useState(false);
   const [policy, setPolicy] = useState<GenerationPolicy>({
     startChapter: 1,
     // 默认单章审批制：一次只写一章，改稿+正史确认后再创建下一章任务。
@@ -650,6 +656,12 @@ function GeneratePage(): React.JSX.Element {
     setSubmitError("");
     try {
       const result = await createDraft(novelId, policy);
+      if (autoCreate)
+        setAutoReview(
+          novelId,
+          true,
+          "全自动连续创作已开启：候选稿与正史建议将自动接受，连续创作至本批完成。",
+        );
       navigate(`/batches?created=${result.id}`);
     } catch (reason) {
       setSubmitError(reason instanceof Error ? reason.message : "任务创建失败");
@@ -795,6 +807,21 @@ function GeneratePage(): React.JSX.Element {
                 approvalGate: policy.approvalGate === false,
               })
             }
+          >
+            <i />
+          </button>
+        </div>
+        <div className="switch-row">
+          <div>
+            <b>全自动连续创作</b>
+            <span>
+              开启后任务启动时自动接受每章候选稿与全部正史建议，连续创作到本批最后一个章节；
+              失败或达到 Token 预算会自动停下，随时可在“生成任务”页关闭
+            </span>
+          </div>
+          <button
+            className={autoCreate ? "switch on" : "switch"}
+            onClick={() => setAutoCreate((value) => !value)}
           >
             <i />
           </button>
@@ -959,6 +986,7 @@ export default function App(): React.JSX.Element {
             path="/novels/:novelId/continuity"
             element={<ContinuityPage />}
           />
+          <Route path="/novels/:novelId/book" element={<BookReaderPage />} />
           <Route
             path="/novels/:novelId/structure"
             element={<StructurePage />}
