@@ -113,6 +113,82 @@ export function selectCharacterStates(
   }
   return [...latest.values()];
 }
+/** 单章上下文最多注入的开放伏笔条数（AN-038 伏笔膨胀治理）。 */
+export const FORESHADOW_CONTEXT_LIMIT = 16;
+/** 单章上下文最多注入的时间线事件条数（取最近发生的）。 */
+export const TIMELINE_CONTEXT_LIMIT = 24;
+
+/**
+ * AN-038 开放伏笔裁剪：无上限注入会让上下文随章节数线性膨胀（实测 175 条
+ * 未回收伏笔把第 61 章推到 10.6 万 tokens）。排序规则：
+ * 1. 本章计划（章题/大纲/场景）提及的伏笔最先保留——即将回收；
+ * 2. 其余按埋设章距当前章的"账龄"降序——埋得越久越超期，越该优先回收。
+ */
+export function selectForeshadowThreads(
+  foreshadow: ForeshadowThread[],
+  positionByChapterId: Map<string, number>,
+  chapterPosition: number,
+  chapterPlanText: string,
+  limit = FORESHADOW_CONTEXT_LIMIT,
+): ForeshadowThread[] {
+  const positionOf = (item: ForeshadowThread): number =>
+    item.setupChapterId
+      ? (positionByChapterId.get(item.setupChapterId) ??
+        Number.POSITIVE_INFINITY)
+      : Number.POSITIVE_INFINITY;
+  return foreshadow
+    .filter(
+      (item) => item.status !== "resolved" && item.status !== "abandoned",
+    )
+    .filter((item) => {
+      const setup = positionOf(item);
+      return setup < chapterPosition;
+    })
+    .sort((a, b) => {
+      const aMentioned = chapterPlanText.includes(a.title),
+        bMentioned = chapterPlanText.includes(b.title);
+      if (aMentioned !== bMentioned)
+        return Number(bMentioned) - Number(aMentioned);
+      // 账龄大（埋得早）在前；无埋设章的排最后。
+      const aAge = chapterPosition - positionOf(a),
+        bAge = chapterPosition - positionOf(b);
+      return bAge - aAge || a.createdAt.localeCompare(b.createdAt);
+    })
+    .slice(0, limit);
+}
+
+/**
+ * AN-038 时间线裁剪：只保留截至当前章最近的 N 条事件。更早的事件已由
+ * 周期收束状态与人物状态概括，逐条注入只是重复消耗预算。作者手动创建
+ * （无章节归属）的事件视为世界观锚点，优先保留。
+ */
+export function selectTimelineEvents(
+  timeline: TimelineEvent[],
+  positionByChapterId: Map<string, number>,
+  chapterPosition: number,
+  limit = TIMELINE_CONTEXT_LIMIT,
+): TimelineEvent[] {
+  const chaptered = timeline
+    .filter((item) => {
+      if (!item.chapterId) return false;
+      const at = positionByChapterId.get(item.chapterId);
+      return at !== undefined && at <= chapterPosition;
+    })
+    .sort(
+      (a, b) =>
+        (positionByChapterId.get(a.chapterId!) ??
+          Number.POSITIVE_INFINITY) -
+          (positionByChapterId.get(b.chapterId!) ?? Number.POSITIVE_INFINITY) ||
+        a.createdAt.localeCompare(b.createdAt),
+    );
+  const manual = timeline.filter((item) => !item.chapterId);
+  const keptManual = manual.slice(0, limit),
+    keptChaptered = chaptered.slice(
+      Math.max(0, chaptered.length - Math.max(0, limit - keptManual.length)),
+    );
+  return [...keptManual, ...keptChaptered];
+}
+
 function fingerprint(text: string): string {
   let hash = 2166136261;
   for (let i = 0; i < text.length; i++) {
@@ -252,11 +328,19 @@ export function buildContextPack(input: ContextPackInput): ContextPack {
           },
         ]
       : []),
-    ...input.foreshadow
-      .filter(
-        (item) => item.status !== "resolved" && item.status !== "abandoned",
-      )
-      .map((item) => ({
+    ...(input.foreshadow.length
+      ? [
+          {
+            id: "foreshadow-guidance",
+            kind: "continuity" as const,
+            label: "伏笔治理",
+            priority: 85,
+            required: false,
+            text: "以下开放伏笔按「本章计划提及优先，其次埋设最久」排序。写作时优先推进或回收最早埋下且仍未回收的伏笔，不要凭空新开无法回收的伏笔线。",
+          },
+        ]
+      : []),
+    ...input.foreshadow.map((item) => ({
         id: item.id,
         kind: "continuity" as const,
         label: `伏笔 · ${item.title}`,

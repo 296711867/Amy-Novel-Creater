@@ -11,7 +11,9 @@ import {
   buildContextPack,
   estimateTokens,
   selectCharacterStates,
+  selectForeshadowThreads,
   selectRecentChapters,
+  selectTimelineEvents,
 } from "@domain/context-pack";
 import type { ModelProfile } from "@domain/model-profile";
 import type { UsageMeasurement } from "@domain/usage";
@@ -365,22 +367,31 @@ export class BatchRunner {
         await this.database.setBatchStatus(current.id, "paused");
         return;
       }
+      // AN-038 上下文瘦身：开放伏笔按「本章提及优先、埋设最久优先」限量注入，
+      // 时间线只带最近发生的事件，防止上下文随章节数线性膨胀。
+      const scenes = structure.scenes.filter(
+          (item) => item.chapterId === chapter.id,
+        ),
+        foreshadowContext = selectForeshadowThreads(
+          foreshadow,
+          positionById,
+          chapter.position,
+          `${chapter.title}\n${chapter.outline}\n${scenes.map((s) => `${s.title}${s.summary}`).join("\n")}`,
+        ),
+        timelineContext = selectTimelineEvents(
+          timeline,
+          positionById,
+          chapter.position,
+        );
       const pack = buildContextPack({
         novel,
         chapter,
         volume: structure.volumes.find((item) => item.id === chapter.volumeId),
-        scenes: structure.scenes.filter(
-          (item) => item.chapterId === chapter.id,
-        ),
+        scenes,
         bible,
         entities,
-        timeline: timeline.filter(
-          (item) =>
-            !item.chapterId ||
-            (chapters.find((value) => value.id === item.chapterId)?.position ??
-              Infinity) <= chapter.position,
-        ),
-        foreshadow,
+        timeline: timelineContext,
+        foreshadow: foreshadowContext,
         characterStates: states,
         recentChapters: selectRecentChapters(
           chapters,

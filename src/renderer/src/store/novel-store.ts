@@ -44,7 +44,9 @@ import type { CreateChapterInput, UpdateChapterPlanInput } from "@domain/novel";
 import {
   buildContextPack,
   selectCharacterStates,
+  selectForeshadowThreads,
   selectRecentChapters,
+  selectTimelineEvents,
   type ContextPack,
 } from "@domain/context-pack";
 import type { UsageRecord } from "@domain/usage";
@@ -1049,6 +1051,12 @@ export const useNovelStore = create<NovelState>((set, get) => ({
     const volume = state.volumes[novelId]?.find(
         (item) => item.id === chapter.volumeId,
       ),
+      scenes = (state.scenes[novelId] ?? []).filter(
+        (item) => item.chapterId === chapterId,
+      ),
+      positionById = new Map<string, number>(
+        chapters.map((item) => [item.id, item.position] as [string, number]),
+      ),
       recent = selectRecentChapters(
         chapters,
         chapter.position,
@@ -1058,19 +1066,21 @@ export const useNovelStore = create<NovelState>((set, get) => ({
       novel,
       chapter,
       volume,
-      scenes: (state.scenes[novelId] ?? []).filter(
-        (item) => item.chapterId === chapterId,
-      ),
+      scenes,
       bible: state.bibleSections[novelId] ?? [],
       entities: state.entities[novelId] ?? [],
-      timeline: (state.timelineEvents[novelId] ?? []).filter((item) => {
-        const linked = chapters.find((ch) => ch.id === item.chapterId);
-        return (
-          !item.chapterId ||
-          Boolean(linked && linked.position <= chapter.position)
-        );
-      }),
-      foreshadow: state.foreshadowThreads[novelId] ?? [],
+      // AN-038 上下文瘦身：伏笔/时间线限量注入（久埋伏笔优先回收）。
+      timeline: selectTimelineEvents(
+        state.timelineEvents[novelId] ?? [],
+        positionById,
+        chapter.position,
+      ),
+      foreshadow: selectForeshadowThreads(
+        state.foreshadowThreads[novelId] ?? [],
+        positionById,
+        chapter.position,
+        `${chapter.title}\n${chapter.outline}\n${scenes.map((s) => `${s.title}${s.summary}`).join("\n")}`,
+      ),
       characterStates: selectCharacterStates(
         state.characterStates[novelId] ?? [],
         new Map(chapters.map((item) => [item.id, item.position])),

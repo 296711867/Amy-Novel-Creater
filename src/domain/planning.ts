@@ -235,6 +235,17 @@ export function rollingPlanningMemoryText(
           !["resolved", "abandoned"].includes(item.status) &&
           beforeRange(item.setupChapterId),
       )
+      // AN-038：埋设越早越接近超期，升序截断让规划优先安排回收最早的伏笔，
+      // 而不是按入库顺序随机搁置。
+      .sort(
+        (a, b) =>
+          (a.setupChapterId
+            ? (positions.get(a.setupChapterId) ?? Number.POSITIVE_INFINITY)
+            : 0) -
+          (b.setupChapterId
+            ? (positions.get(b.setupChapterId) ?? Number.POSITIVE_INFINITY)
+            : 0),
+      )
       .slice(0, 12)
       .map(
         (item) =>
@@ -257,7 +268,7 @@ export function rollingPlanningMemoryText(
         ? `【上一周期 第 ${previous.startChapter}–${previous.endChapter} 章】\n预期结束：${clip(previous.expectedClosingState || "未填写", 700)}\n实际结束（优先作为下一批起点）：${clip(previous.actualClosingState || "未填写", 1200)}`
         : "【上一周期】没有找到已封存周期；只能使用下方动态正史。",
       `【人物最新状态】\n${states.join("\n") || "无已确认人物状态"}`,
-      `【开放伏笔】\n${openForeshadow.join("\n") || "无开放伏笔"}`,
+      `【开放伏笔】（按埋设先后排序：优先在本书安排回收最早埋下且仍未回收的伏笔，避免越积越多）\n${openForeshadow.join("\n") || "无开放伏笔"}`,
       `【时间线尾部】\n${timelineTail.join("\n") || "无已确认时间线"}`,
     ];
   return clip(sections.join("\n\n"), 4000);
