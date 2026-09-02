@@ -403,29 +403,36 @@ export function createCruiseActions(set: NovelStateSet, get: NovelStateGet) {
         (item) =>
           policy.startChapter >= item.startChapter &&
           policy.endChapter <= item.endChapter &&
-          ["ready", "generating", "memory_review"].includes(item.status),
+          ["ready", "generating", "memory_review", "completed"].includes(
+            item.status,
+          ),
       );
       if (!cycle) {
         pauseCruise(novelId, "未找到本周期策划包，请人工检查。");
         return;
       }
-      // 封存：实际结束状态从最新正史记忆确定性起草（作者可事后改写）。
-      await get().loadContinuity(novelId);
-      if (!get().entities[novelId]) await get().loadEntities(novelId);
-      const draft = draftClosingState({
-        cycle,
-        chapters: rangeChapters,
-        entities: get().entities[novelId] ?? [],
-        timeline: get().timelineEvents[novelId] ?? [],
-        characterStates: get().characterStates[novelId] ?? [],
-        foreshadow: get().foreshadowThreads[novelId] ?? [],
-      });
-      await get().savePlanningCycle({
-        ...cycle,
-        status: "completed",
-        actualClosingState: draft,
-      });
-      await get().invalidatePlanning(novelId, 7);
+      if (cycle.status === "completed") {
+        // 周期已被封存（作者手动确认或上一轮巡航完成）：跳过封存直接
+        // 进入下一周期，不再视为异常（线上形态：手动点过“确认记忆回写”）。
+      } else {
+        // 封存：实际结束状态从最新正史记忆确定性起草（作者可事后改写）。
+        await get().loadContinuity(novelId);
+        if (!get().entities[novelId]) await get().loadEntities(novelId);
+        const draft = draftClosingState({
+          cycle,
+          chapters: rangeChapters,
+          entities: get().entities[novelId] ?? [],
+          timeline: get().timelineEvents[novelId] ?? [],
+          characterStates: get().characterStates[novelId] ?? [],
+          foreshadow: get().foreshadowThreads[novelId] ?? [],
+        });
+        await get().savePlanningCycle({
+          ...cycle,
+          status: "completed",
+          actualClosingState: draft,
+        });
+        await get().invalidatePlanning(novelId, 7);
+      }
       const totalCeiling = Math.min(cruise.targetChapter, novel.targetChapters);
       const next = nextCycleRange({
         sealedEndChapter: policy.endChapter,

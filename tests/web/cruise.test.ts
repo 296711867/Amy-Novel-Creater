@@ -486,6 +486,23 @@ describe("全自动巡航（AN-035）", () => {
     expect(window.localStorage.getItem("amy-novel:cruise")).toBe("{}");
   });
 
+  it("周期已被人工封存 → 跳过封存直接进入下一周期（不报「未找到策划包」）", async () => {
+    seedRun({});
+    seedChapters(21, 30, "accepted");
+    seedCycle(21, 30, "completed"); // 已封存（作者手动确认记忆回写）
+    seedCycle(31, 40, "ready"); // 下一周期策划包已就绪
+    store.setState({ cruise: { n1: { enabled: true, status: "active", targetChapter: 40, message: "", updatedAt: backend.now } } });
+    await store.getState().tickCruise("n1");
+    // 不重复封存已完成的周期，也不暂停；直接从已就绪的下一周期开正文批次。
+    expect(
+      backend.calls.savePlanningCycle.every(
+        (item) => (item as { id: string }).id !== "cy-21",
+      ),
+    ).toBe(true);
+    expect(backend.calls.createGenerationDraft.length).toBeGreaterThan(0);
+    expect(store.getState().cruise["n1"]?.status).toBe("active");
+  });
+
   it("chapter_review 残留 + 批次已终态：直接收敛运行状态（秒回死洞回归）", async () => {
     seedRun({
       mode: "checkpoint",
