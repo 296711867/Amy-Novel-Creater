@@ -15,7 +15,10 @@ const CRUISE_INTERVAL_MS = 3000;
 const CRUISE_STORAGE_KEY = "amy-novel:cruise";
 const cruiseTimers = new Map<string, number>();
 const cruiseTicking = new Set<string>();
+const cruiseTickGen = new Map<string, number>();
 const cruiseFailures = new Map<string, number>();
+/** 单轮检查看门狗时限：规划模型调用最长等待 300 秒，留足余量。 */
+const CRUISE_TICK_TIMEOUT_MS = 390_000;
 
 export function readPersistedCruise(): Record<string, CruiseState> {
   try {
@@ -81,7 +84,7 @@ export function createCruiseActions(set: NovelStateSet, get: NovelStateGet) {
       enabled: true,
       status: "active",
       targetChapter,
-      message: "巡航已开启：正在检查当前进度…",
+      message: "巡航已开启：正在检查当前进度（首轮可能含 1–5 分钟模型规划，实时动态见「生成任务」页）…",
       updatedAt: new Date().toISOString(),
     };
     set({ cruise: { ...get().cruise, [novelId]: entry } });
@@ -111,7 +114,7 @@ export function createCruiseActions(set: NovelStateSet, get: NovelStateGet) {
         [novelId]: {
           ...current,
           status: "active",
-          message: "已继续巡航：正在检查进度…",
+          message: "已继续巡航：正在检查进度（可能含 1–5 分钟模型规划，实时动态见「生成任务」页）…",
           updatedAt: new Date().toISOString(),
         },
       },
@@ -130,6 +133,24 @@ export function createCruiseActions(set: NovelStateSet, get: NovelStateGet) {
     if (!get().autoReview[novelId]?.enabled)
       get().setAutoReview(novelId, true, "巡航模式：自动接受已联动开启。");
     cruiseTicking.add(novelId);
+    // 心跳看门狗（AN-035）：任一步 IPC 挂起不返回时，旧实现的防重入锁会
+    // 永久占死（线上形态：永远停在“正在检查当前进度”，停止/重启无效）。
+    // 超时强制解锁并明示状态，下一轮重试；代际标记防止旧轮 finally
+    // 误删新轮的锁。超时不算失败——含模型调用的检查轮最长 300 秒属正常。
+    const generation = (cruiseTickGen.get(novelId) ?? 0) + 1;
+    cruiseTickGen.set(novelId, generation);
+    const watchdog = window.setTimeout(() => {
+      if (
+        cruiseTicking.has(novelId) &&
+        cruiseTickGen.get(novelId) === generation
+      ) {
+        cruiseTicking.delete(novelId);
+        noteCruise(
+          novelId,
+          "上一轮检查超时（可能含最长数分钟的模型调用），已解锁，下一轮自动重试。",
+        );
+      }
+    }, CRUISE_TICK_TIMEOUT_MS);
     try {
       const novel =
         get().novels.find((item) => item.id === novelId) ??
@@ -464,7 +485,9 @@ export function createCruiseActions(set: NovelStateSet, get: NovelStateGet) {
         );
       }
     } finally {
-      cruiseTicking.delete(novelId);
+      window.clearTimeout(watchdog);
+      if (cruiseTickGen.get(novelId) === generation)
+        cruiseTicking.delete(novelId);
     }
   },
   };

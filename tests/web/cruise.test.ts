@@ -59,6 +59,8 @@ const backend = vi.hoisted(() => {
       generateNovelPlan: [] as string[],
       createGenerationDraft: [] as unknown[],
     },
+    /** 挂起模拟：这些提案的 review 调用永不返回（看门狗用例）。 */
+    hangProposalIds: [] as string[],
     runSeq: 0,
     batchSeq: 0,
   };
@@ -107,6 +109,7 @@ vi.mock("@renderer/platform/web-platform", () => ({
       id: string,
       status: string,
     ) => {
+      if (backend.hangProposalIds.includes(id)) return new Promise(() => {});
       backend.calls.reviewPlanningProposal.push({ id, status });
       const item = backend.proposals.find((value) => value.id === id)!;
       // 模拟 AN-005 门禁：新增提案撞上已有设定时接受被拒（线上事故形态）。
@@ -481,5 +484,38 @@ describe("全自动巡航（AN-035）", () => {
     expect(store.getState().autoReview["n1"]?.enabled).toBe(false);
     expect(store.getState().autoReview["n1"]?.message).toContain("巡航完成");
     expect(window.localStorage.getItem("amy-novel:cruise")).toBe("{}");
+  });
+
+  it("看门狗：单步挂起不返回时超时解锁并明示，不再永久卡死（AN-035）", async () => {
+    vi.useFakeTimers();
+    try {
+      seedRun({
+        status: "paused",
+        checkpoint: "proposal_review",
+        batchId: "b-seed",
+      });
+      seedCycle(21, 30, "generating");
+      backend.hangProposalIds = ["hang1"];
+      backend.proposals.push({
+        id: "hang1",
+        novelId: "n1",
+        action: "update",
+        status: "pending",
+        cycleId: "entity-merge",
+        startChapter: 21,
+        endChapter: 30,
+      });
+      store.setState({ cruise: { n1: { enabled: true, status: "active", targetChapter: 40, message: "", updatedAt: backend.now } } });
+      // 第一轮：卡在挂起的提案上不返回。
+      const first = store.getState().tickCruise("n1");
+      await vi.advanceTimersByTimeAsync(391_000);
+      // 看门狗已解锁并明示状态；巡航未被误判为失败。
+      expect(store.getState().cruise["n1"]?.status).toBe("active");
+      expect(store.getState().cruise["n1"]?.message).toContain("超时");
+      backend.hangProposalIds = [];
+      void first; // 挂起的检查轮保持 pending，看门狗已解锁，不 await。
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
