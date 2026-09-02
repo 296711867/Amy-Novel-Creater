@@ -574,6 +574,28 @@ describe("自动审阅（AN-026）", () => {
     expect(store.getState().autoReview["n1"]?.enabled).toBe(false);
   });
 
+  it("AN-035 收尾模式：批次 completed 但仍有候选未入正史时继续处理，不提前收工", async () => {
+    backend.candidates[0].status = "accepted"; // 第 1 章已完成
+    backend.jobs[0].status = "completed";
+    backend.batches[0].status = "completed"; // 批次已收敛（无门禁批次先生成后审阅）
+    backend.batches[0].awaitingReview = false;
+    // 第 2 章候选就绪待接受（jobs[1] candidate_ready → cd1? 需要第二个候选）。
+    backend.candidates.push({
+      ...backend.candidates[0],
+      id: "cd2",
+      chapterId: "c2",
+      status: "candidate",
+    });
+    backend.jobs[1].status = "candidate_ready";
+    backend.jobs[1].candidateId = "cd2";
+    enableAuto();
+    await store.getState().tickAutoReview("n1");
+    // 不因"批次已完成"提前自停，而是继续接受剩余候选。
+    expect(store.getState().autoReview["n1"]?.enabled).toBe(true);
+    expect(backend.candidates.find((item) => item.id === "cd2")?.status).toBe("accepted");
+    expect(backend.calls.acceptAttempts).toContain("cd2");
+  });
+
   it("AN-028 新角色：自动模式为圣经外角色建档并接受状态建议；人工路径仍拦截", async () => {
     backend.proposals.push(backend.newCharacterProposal);
     // 人工路径：不带 autoCreateCharacter 时保持原有门禁，要求先建档。

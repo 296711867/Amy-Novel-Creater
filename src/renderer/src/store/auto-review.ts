@@ -101,7 +101,7 @@ export function createAutoReviewActions(set: NovelStateSet, get: NovelStateGet) 
     }, AUTO_REVIEW_TICK_TIMEOUT_MS);
     try {
       const batches = await get().loadBatches();
-      const active =
+      let active =
         batches.find(
           (item) => item.novelId === novelId && item.awaitingReview,
         ) ??
@@ -111,6 +111,24 @@ export function createAutoReviewActions(set: NovelStateSet, get: NovelStateGet) 
             item.status !== "completed" &&
             item.status !== "cancelled",
         );
+      if (!active) {
+        // 收尾模式（AN-035）：无门禁批次“先连续生成、后集中审阅”，批次
+        // completed 时可能仍有候选未入正史——继续处理直至全部接受，
+        // 而不是提前宣布收工（线上形态：49/10 章卡住最后一章）。
+        const finished = batches
+          .filter(
+            (item) =>
+              item.novelId === novelId &&
+              item.status === "completed" &&
+              item.outputTokensUsed > 0,
+          )
+          .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1))[0];
+        if (finished) {
+          const jobs = await get().loadJobs(finished.id);
+          if (jobs.some((item) => item.status === "candidate_ready"))
+            active = finished;
+        }
+      }
       if (!active) {
         // 没有进行中的批次：本批已完成则自动收工，否则保持待命等新批次。
         if (
