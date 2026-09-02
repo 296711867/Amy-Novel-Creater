@@ -486,6 +486,30 @@ describe("全自动巡航（AN-035）", () => {
     expect(window.localStorage.getItem("amy-novel:cruise")).toBe("{}");
   });
 
+  it("chapter_review 残留 + 批次已终态：直接收敛运行状态（秒回死洞回归）", async () => {
+    seedRun({
+      mode: "checkpoint",
+      status: "paused",
+      checkpoint: "chapter_review",
+      batchId: "b-done",
+    });
+    backend.batches.push({
+      id: "b-done",
+      novelId: "n1",
+      status: "completed",
+      policy: policy(31, 40),
+      outputTokensUsed: 100,
+      awaitingReview: false,
+      createdAt: backend.now,
+      updatedAt: backend.now,
+    });
+    store.setState({ cruise: { n1: { enabled: true, status: "active", targetChapter: 40, message: "", updatedAt: backend.now } } });
+    await store.getState().tickCruise("n1");
+    // 运行按批次终态收敛为 completed（不再依赖 running 前置的 sync）。
+    const run = backend.runs.find((item) => item.id === "wr-seed");
+    expect((run as { status?: string }).status).toBe("completed");
+  });
+
   it("看门狗：单步挂起不返回时超时解锁并明示，不再永久卡死（AN-035）", async () => {
     vi.useFakeTimers();
     try {

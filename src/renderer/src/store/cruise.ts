@@ -1,7 +1,10 @@
 import { platform } from "@renderer/platform/web-platform";
 import { useNovelStore } from "./novel-store";
 import type { NovelStateGet, NovelStateSet } from "./utils";
-import { WORKFLOW_PHASE_LABELS } from "@domain/workflow-run";
+import {
+  WORKFLOW_PHASE_LABELS,
+  workflowRunUpdateFromBatch,
+} from "@domain/workflow-run";
 import {
   cruisePolicy,
   draftClosingState,
@@ -296,7 +299,10 @@ export function createCruiseActions(set: NovelStateSet, get: NovelStateGet) {
           return;
         }
         if (run.checkpoint === "chapter_review") {
-          // 状态对账：批次已终态（事件丢失残留的 chapter_review）→ 收敛运行。
+          // 状态对账：批次已终态（事件丢失残留的 chapter_review）→ 直接按
+          // 批次终态收敛运行。syncWorkflowRunFromBatch 只处理 running 运行，
+          // 对 paused 会空返回，造成每轮静默空转（线上形态：文案永远停在
+          // “正在检查”，看门狗也抓不到的秒回死洞）。
           const batch = (await get().loadBatches()).find(
             (item) => item.id === run.batchId,
           );
@@ -304,7 +310,11 @@ export function createCruiseActions(set: NovelStateSet, get: NovelStateGet) {
             batch &&
             ["completed", "failed", "cancelled"].includes(batch.status)
           ) {
-            await get().syncWorkflowRunFromBatch(batch.id);
+            const update = workflowRunUpdateFromBatch(batch);
+            if (update) {
+              await platform.updateWorkflowRun({ id: run.id, ...update });
+              await get().loadWorkflowRuns(novelId);
+            }
             return;
           }
           // 进度可见：本周期已入正史 X/Y，而不是一句静态的“正在处理”。
