@@ -216,10 +216,31 @@ export function createCruiseActions(set: NovelStateSet, get: NovelStateGet) {
           await get().syncWorkflowRunFromBatch(batch.id);
           return;
         }
-        noteCruise(
-          novelId,
-          `推进中：${WORKFLOW_PHASE_LABELS[run.currentPhase]}（目标第 ${cruise.targetChapter} 章）`,
-        );
+        if (run.currentPhase === "generation" && batch) {
+          // 正文阶段给章级进度，而不是一句静态的“正文候选生成”。
+          const policy = run.config.generationPolicy;
+          const all =
+            get().chapters[novelId] ??
+            ((await get().loadChapters(novelId)),
+            get().chapters[novelId] ?? []);
+          const range = all.filter(
+            (item) =>
+              item.position >= policy.startChapter &&
+              item.position <= policy.endChapter,
+          );
+          const acceptedNow = range.filter(
+            (item) => item.status === "accepted",
+          ).length;
+          noteCruise(
+            novelId,
+            `正文生成中：第 ${policy.startChapter}–${policy.endChapter} 章已入正史 ${acceptedNow}/${range.length}（批次 ${batch.outputTokensUsed.toLocaleString()} tokens；最新动作见「生成任务」页；总目标第 ${cruise.targetChapter} 章）`,
+          );
+        } else {
+          noteCruise(
+            novelId,
+            `推进中：${WORKFLOW_PHASE_LABELS[run.currentPhase]}（目标第 ${cruise.targetChapter} 章）`,
+          );
+        }
         return;
       }
       // 代作者确认策划包：检查点模式的运行停在 plan_review（策划包待审核），
