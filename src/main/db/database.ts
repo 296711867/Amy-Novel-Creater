@@ -1,6 +1,11 @@
 import { createClient, type Client } from "@libsql/client";
 import type { NovelProjectBundle } from "@domain/project-export";
 import { runMigrations } from "./migrations";
+import {
+  applyConnectionPragmas,
+  createGuardedClient,
+  probeWriteLock,
+} from "./client-guard";
 import { createNovelsRepository } from "./repositories/novels";
 import { createChaptersRepository } from "./repositories/chapters";
 import { createStoryStructureRepository } from "./repositories/story-structure";
@@ -29,29 +34,69 @@ import {
 } from "./repositories/global-findings";
 import type { GlobalFinding } from "@domain/global-consistency";
 
+export type DbClientFactory = (url: string) => Client;
+export type DbRecoveryListener = (reconnected: boolean, message: string) => void;
+
 /**
  * Thin facade over the domain repositories. Public API signatures must stay
  * stable: src/main/ipc/novel-ipc.ts and tests/main/*.test.ts depend on them.
+ *
+ * AN-036：所有语句经过 client-guard（超时+锁探测）。写入挂起时操作以可读
+ * 错误快速失败（渲染层巡航立即暂停而非静默卡死），并自动尝试重开连接。
  */
 export class NovelDatabase {
-  private readonly novels;
-  private readonly chapters;
-  private readonly structure;
-  private readonly bible;
-  private readonly continuity;
-  private readonly generation;
-  private readonly usage;
-  private readonly profiles;
-  private readonly namePools;
-  private readonly planningWorkflow;
-  private readonly planningRuns;
-  private readonly planningCycles;
-  private readonly planningProposals;
-  private readonly styleTemplates;
-  private readonly workflowRuns;
-  private readonly globalFindings: GlobalFindingsRepository;
+  private novels!: ReturnType<typeof createNovelsRepository>;
+  private chapters!: ReturnType<typeof createChaptersRepository>;
+  private structure!: ReturnType<typeof createStoryStructureRepository>;
+  private bible!: ReturnType<typeof createStoryBibleRepository>;
+  private continuity!: ReturnType<typeof createContinuityRepository>;
+  private generation!: ReturnType<typeof createGenerationRepository>;
+  private usage!: ReturnType<typeof createUsageRepository>;
+  private profiles!: ReturnType<typeof createModelProfilesRepository>;
+  private namePools!: ReturnType<typeof createNamePoolRepository>;
+  private planningWorkflow!: ReturnType<typeof createPlanningWorkflowRepository>;
+  private planningRuns!: ReturnType<typeof createPlanningRunsRepository>;
+  private planningCycles!: ReturnType<typeof createPlanningCyclesRepository>;
+  private planningProposals!: ReturnType<typeof createPlanningProposalsRepository>;
+  private styleTemplates!: ReturnType<typeof createStyleTemplatesRepository>;
+  private workflowRuns!: ReturnType<typeof createWorkflowRunsRepository>;
+  private globalFindings!: GlobalFindingsRepository;
 
-  private constructor(private readonly client: Client) {
+  private readonly url: string;
+  private readonly clientFactory: DbClientFactory;
+  private readonly timeoutMs?: number;
+  private readonly onRecovery?: DbRecoveryListener;
+  private closed = false;
+  private recoveryInFlight = false;
+  private lastRecoveryAt = 0;
+  private stallRecoveries = 0;
+  private rawClient!: Client;
+  /** 带超时守卫的 Client；仓库层只接触它。 */
+  private client!: Client;
+
+  private constructor(options: {
+    url: string;
+    clientFactory: DbClientFactory;
+    timeoutMs?: number;
+    onRecovery?: DbRecoveryListener;
+  }) {
+    this.url = options.url;
+    this.clientFactory = options.clientFactory;
+    this.timeoutMs = options.timeoutMs;
+    this.onRecovery = options.onRecovery;
+    this.rawClient = this.clientFactory(this.url);
+    this.client = this.armGuards(this.rawClient);
+    this.buildRepos(this.client);
+  }
+
+  private armGuards(raw: Client): Client {
+    return createGuardedClient(raw, {
+      timeoutMs: this.timeoutMs,
+      onStall: () => this.scheduleRecovery(),
+    });
+  }
+
+  private buildRepos(client: Client): void {
     this.novels = createNovelsRepository(client);
     this.chapters = createChaptersRepository(client);
     this.structure = createStoryStructureRepository(client);
@@ -70,13 +115,78 @@ export class NovelDatabase {
     this.globalFindings = createGlobalFindingsRepository(client);
   }
 
-  static async open(path: string): Promise<NovelDatabase> {
-    const db = new NovelDatabase(createClient({ url: `file:${path}` }));
+  private async swapClient(raw: Client): Promise<void> {
+    try {
+      this.rawClient.close();
+    } catch {
+      // 旧连接可能已死，关闭失败不影响重开
+    }
+    this.rawClient = raw;
+    await applyConnectionPragmas(raw);
+    this.client = this.armGuards(raw);
+    this.buildRepos(this.client);
+  }
+
+  /** 写入超时回调：探测写锁，卡死则重开连接。带冷却防抖。 */
+  private scheduleRecovery(): void {
+    if (this.closed || this.recoveryInFlight) return;
+    if (Date.now() - this.lastRecoveryAt < 5_000) return;
+    this.recoveryInFlight = true;
+    void (async () => {
+      let reconnected = false;
+      let message: string;
+      try {
+        const healthy = await probeWriteLock(this.rawClient, 3_000);
+        if (healthy) {
+          message = "数据库写入短暂超时后锁探测已恢复，未重开连接";
+        } else {
+          await this.swapClient(this.clientFactory(this.url));
+          reconnected = true;
+          message = "检测到数据库写入挂起，已自动重开连接；若持续失败请重启应用";
+        }
+      } catch (error) {
+        message = `数据库自动重连失败：${error instanceof Error ? error.message : String(error)}`;
+      } finally {
+        this.recoveryInFlight = false;
+        this.lastRecoveryAt = Date.now();
+        this.stallRecoveries += 1;
+        console.warn(`[db][AN-036] ${message}`);
+        this.onRecovery?.(reconnected, message);
+      }
+    })();
+  }
+
+  /** AN-036 运维探测：当前写锁是否可用（供健康检查/测试使用）。 */
+  async checkWritable(): Promise<boolean> {
+    return probeWriteLock(this.rawClient, 3_000);
+  }
+
+  get stallRecoveryCount(): number {
+    return this.stallRecoveries;
+  }
+
+  static async open(
+    path: string,
+    options: {
+      clientFactory?: DbClientFactory;
+      timeoutMs?: number;
+      onRecovery?: DbRecoveryListener;
+    } = {},
+  ): Promise<NovelDatabase> {
+    const url = path.includes("://") ? path : `file:${path}`;
+    const db = new NovelDatabase({
+      url,
+      clientFactory: options.clientFactory ?? ((target) => createClient({ url: target })),
+      timeoutMs: options.timeoutMs,
+      onRecovery: options.onRecovery,
+    });
+    await applyConnectionPragmas(db.rawClient);
     await runMigrations(db.client);
     return db;
   }
 
   close(): void {
+    this.closed = true;
     this.client.close();
   }
 

@@ -56,6 +56,14 @@ app.whenReady().then(async () => {
   electronApp.setAppUserModelId("com.amy.novel");
   const database = await NovelDatabase.open(
     join(app.getPath("userData"), "amy-novel.db"),
+    {
+      // AN-036：写锁挂起自动重开连接时留痕，便于复盘复现时间点。
+      onRecovery: (reconnected) => {
+        console.warn(
+          `[db][AN-036] ${new Date().toISOString()} 写入挂起恢复${reconnected ? "（已重开连接）" : "（锁自行恢复）")}`,
+        );
+      },
+    },
   );
   registerNovelIpc(
     ipcMain,
