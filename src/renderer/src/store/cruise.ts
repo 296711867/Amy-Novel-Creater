@@ -219,9 +219,7 @@ export function createCruiseActions(set: NovelStateSet, get: NovelStateGet) {
         if (run.currentPhase === "generation" && batch) {
           // 正文阶段给章级进度，而不是一句静态的“正文候选生成”。
           const policy = run.config.generationPolicy;
-          const all =
-            get().chapters[novelId] ??
-            ((await get().loadChapters(novelId)),
+          const all = ((await get().loadChapters(novelId)),
             get().chapters[novelId] ?? []);
           const range = all.filter(
             (item) =>
@@ -340,9 +338,7 @@ export function createCruiseActions(set: NovelStateSet, get: NovelStateGet) {
           }
           // 进度可见：本周期已入正史 X/Y，而不是一句静态的“正在处理”。
           const policy = run.config.generationPolicy;
-          const all =
-            get().chapters[novelId] ??
-            ((await get().loadChapters(novelId)),
+          const all = ((await get().loadChapters(novelId)),
             get().chapters[novelId] ?? []);
           const range = all.filter(
             (item) =>
@@ -378,9 +374,8 @@ export function createCruiseActions(set: NovelStateSet, get: NovelStateGet) {
       }
       // run.status === "completed"：本周期批次已写完，收尾入正史 → 封存 → 下一周期。
       const policy = run.config.generationPolicy;
-      const allChapters =
-        get().chapters[novelId] ??
-        ((await get().loadChapters(novelId)), get().chapters[novelId] ?? []);
+      const allChapters = ((await get().loadChapters(novelId)),
+        get().chapters[novelId] ?? []);
       const rangeChapters = allChapters.filter(
         (item) =>
           item.position >= policy.startChapter && item.position <= policy.endChapter,
