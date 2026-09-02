@@ -32,3 +32,8 @@
   background: #ffe4e1;
   border-color: #d88f88;
 }
+/* AN-037 作品卡片快捷动作：阅读 / 导出书稿 */
+.novel-card{position:relative}
+.novel-actions{display:flex;gap:8px;padding:0 15px 13px;margin-top:-4px}
+.novel-actions a,.novel-actions button{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--border);background:var(--muted);border-radius:8px;padding:6px 11px;font-size:12px;font-weight:700;color:var(--sub)}
+.novel-actions a:hover,.novel-actions button:hover{color:var(--text);border-color:var(--accent)}

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import {
   BookOpen,
   ChevronLeft,
+  Download,
   Flag,
   Loader2,
   Replace,
@@ -13,6 +14,7 @@ import {
   globalSearchChapters,
 } from "@domain/revision";
 import { useNovelStore } from "@renderer/store/novel-store";
+import { downloadBookFile } from "@renderer/book-download";
 
 const EMPTY: never[] = [];
 
@@ -106,6 +108,13 @@ export function BookReaderPage(): React.JSX.Element {
           <b>{novel.title}</b>
           <span>整书连读（{accepted.length} 章已入正史）</span>
         </div>
+        <button
+          title="导出已入正史章节为书稿 TXT"
+          onClick={() => downloadBookFile(novel, accepted)}
+        >
+          <Download size={16} />
+          导出书稿
+        </button>
         <button
           className={reviseOpen ? "" : ""}
           onClick={() => setReviseOpen((current) => !current)}

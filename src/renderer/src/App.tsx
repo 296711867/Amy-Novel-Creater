@@ -5,6 +5,7 @@ import {
   Bot,
   ChartNoAxesColumnIncreasing,
   ChevronRight,
+  Download,
   Feather,
   Home,
   Library,
@@ -31,6 +32,7 @@ import {
 import { CYCLE_SIZE_MAX, CYCLE_SIZE_MIN } from "@domain/novel";
 import type { ScopeAdvice } from "@domain/scope-advisor";
 import { useNovelStore } from "./store/novel-store";
+import { downloadBookFile } from "./book-download";
 import "./novel-actions.css";
 import "./new-novel.css";
 
@@ -210,6 +212,19 @@ function NovelGrid({
               </small>
             </div>
           </NavLink>
+          <div className="novel-actions">
+            <NavLink to={`/novels/${novel.id}/book`} title="整书连读">
+              <BookOpen size={14} />
+              阅读
+            </NavLink>
+            <button
+              title="导出已入正史章节为书稿 TXT（阅读/发布用；工程备份在数据页）"
+              onClick={() => void exportBook(novel)}
+            >
+              <Download size={14} />
+              导出书稿
+            </button>
+          </div>
           {onDelete && (
             <button
               className="novel-delete"
@@ -224,6 +239,16 @@ function NovelGrid({
       ))}
     </div>
   );
+}
+
+/** 导出书稿：章节不在内存时先装载（只读操作）。 */
+async function exportBook(
+  novel: ReturnType<typeof useNovelStore.getState>["novels"][number],
+) {
+  const store = useNovelStore.getState();
+  const chapters =
+    store.chapters[novel.id] ?? (await store.loadChapters(novel.id));
+  downloadBookFile(novel, chapters);
 }
 
 function NovelsPage(): React.JSX.Element {
