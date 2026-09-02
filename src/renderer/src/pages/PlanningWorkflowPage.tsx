@@ -496,6 +496,20 @@ export function PlanningWorkflowPage(): React.JSX.Element {
     (item) => item.status === "pending",
   );
   const latestWorkflowRun = workflowRuns[0];
+  // AN-035 巡航向导跟随：巡航运行期间，步骤条自动跳到正在执行的阶段
+  // （结构规划→7、生成→10），作者打开规划页即可看到它走到哪了；
+  // 暂停/停止后停止跟随，不影响人工浏览。
+  const cruisePhase = cruise?.enabled ? latestWorkflowRun?.currentPhase : undefined;
+  useEffect(() => {
+    if (!cruisePhase || latestWorkflowRun?.status !== "running") return;
+    const step =
+      cruisePhase === "structure"
+        ? 7
+        : cruisePhase === "generation"
+          ? 10
+          : undefined;
+    if (step) setActiveStep(step);
+  }, [cruisePhase, latestWorkflowRun?.status]);
 
   async function runAutopilot(resume = false) {
     if (!novel || !currentRange) return;
@@ -1044,7 +1058,7 @@ export function PlanningWorkflowPage(): React.JSX.Element {
           {activeStep === 10 && (
             <>
               <div className="workflow-card cruise-card">
-                <h3>全自动巡航</h3>
+                <h3>全自动巡航（自动规划 + 自动创作）</h3>
                 {cruise?.enabled ? (
                   <>
                     <p className="cruise-status" data-status={cruise.status}>
@@ -1078,10 +1092,11 @@ export function PlanningWorkflowPage(): React.JSX.Element {
                 ) : (
                   <>
                     <p>
-                      一个按钮从<b>当前进度</b>接着循环写到目标章数：周期规划（设定提案
-                      自动接受）→ 正文连写与正史建议自动接受 → 封存（实际结束状态自动
-                      起草）→ 下一周期。<b>已入正史的章节不会重写</b>；全程留痕，事后
-                      可用故事总览/整书连读回看审计。
+                      一个按钮从<b>当前进度</b>接着循环写到目标章数，循环包含第 7–9 步
+                      的全部工作：结构规划（设定提案自动接受）→ 一致性检查与总检 →
+                      正文连写与正史建议自动接受 → 封存（实际结束状态自动起草）→
+                      下一周期（地基第 1–6 步不重跑）。<b>已入正史的章节不会重写</b>；
+                      巡航运行时本页步骤条会自动跟随当前阶段，全程留痕可事后审计。
                     </p>
                     <div className="cruise-form">
                       <label>

@@ -302,6 +302,8 @@ describe("全自动巡航（AN-035）", () => {
       startChapter: 21,
       endChapter: 30,
     });
+    // AN-035（二）：第 2 周期起地基已存在，只跑结构规划，不重复 1–6 步。
+    expect(backend.calls.generateNovelPlan).toEqual(["structure"]);
     // 开关持久化 + 自动接受联动开启。
     expect(
       JSON.parse(window.localStorage.getItem("amy-novel:cruise") ?? "{}").n1,
@@ -439,6 +441,8 @@ describe("全自动巡航（AN-035）", () => {
       startChapter: 31,
       endChapter: 40,
     });
+    // 封存后开下一周期：同样只跑结构规划（不重复圣经/人物/场景）。
+    expect(backend.calls.generateNovelPlan).toEqual(["structure"]);
     expect(store.getState().cruise["n1"]?.status).toBe("active");
     expect(store.getState().cruise["n1"]?.message).toContain("已封存");
   });

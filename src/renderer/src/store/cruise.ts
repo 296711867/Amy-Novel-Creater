@@ -174,7 +174,7 @@ export function createCruiseActions(set: NovelStateSet, get: NovelStateGet) {
           outputTokenBudget: 120000,
           concurrency: 1,
           deepThinking: false,
-        });
+        }, startChapter > 1 ? "structure" : undefined);
         noteCruise(novelId, `开始规划第 ${startChapter}–${endChapter} 章…`);
         return;
       }
@@ -368,9 +368,14 @@ export function createCruiseActions(set: NovelStateSet, get: NovelStateGet) {
         );
         return;
       }
-      await get().startWorkflowRun(novelId, "autopilot", {
-        ...cruisePolicy(policy, next),
-      });
+      // 第 2 周期起地基（第 1–6 步）已存在：直接从结构规划开始，
+      // 省去每周期三次圣经/人物/场景的重复模型调用。
+      await get().startWorkflowRun(
+        novelId,
+        "autopilot",
+        { ...cruisePolicy(policy, next) },
+        next.startChapter > 1 ? "structure" : undefined,
+      );
       noteCruise(
         novelId,
         `第 ${policy.startChapter}–${policy.endChapter} 章已封存，开始规划第 ${next.startChapter}–${next.endChapter} 章。`,

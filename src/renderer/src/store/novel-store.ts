@@ -102,7 +102,7 @@ import type {
   WorkflowMode,
   WorkflowRun,
 } from "@domain/workflow-run";
-import { workflowRunUpdateFromBatch } from "@domain/workflow-run";
+import { workflowRunUpdateFromBatch, type WorkflowPhase } from "@domain/workflow-run";
 import type { CruiseState } from "@domain/workflow-cruise";
 import type { GlobalFinding } from "@domain/global-consistency";
 import { resumeWorkflowRun } from "@application/run-workflow";
@@ -225,10 +225,16 @@ export interface NovelState {
     accept: boolean,
   ): Promise<PlanningProposal>;
   loadWorkflowRuns(novelId: string): Promise<WorkflowRun[]>;
+  /**
+   * startPhase：从指定规划阶段起步（AN-035）。第 2 周期起地基（圣经/
+   * 人物/场景）已存在，直接从 structure 开始，避免每周期重复跑第 1–6 步
+   * 的三次模型调用；省略时从 bible 全流程跑（首个周期/人工启动）。
+   */
   startWorkflowRun(
     novelId: string,
     mode: WorkflowMode,
     policy: GenerationPolicy,
+    startPhase?: WorkflowPhase,
   ): Promise<WorkflowRun>;
   resumeWorkflowRun(runId: string): Promise<WorkflowRun>;
   syncWorkflowRunFromBatch(batchId: string): Promise<void>;
@@ -765,12 +771,18 @@ export const useNovelStore = create<NovelState>((set, get) => ({
     set({ workflowRuns: { ...get().workflowRuns, [novelId]: runs } });
     return runs;
   },
-  async startWorkflowRun(novelId, mode, policy) {
-    const run = await platform.createWorkflowRun({
+  async startWorkflowRun(novelId, mode, policy, startPhase) {
+    let run = await platform.createWorkflowRun({
       novelId,
       mode,
       config: { generationPolicy: policy, maxPhaseRetries: 2 },
     });
+    if (startPhase && startPhase !== run.currentPhase) {
+      run = await platform.updateWorkflowRun({
+        id: run.id,
+        currentPhase: startPhase,
+      });
+    }
     set({
       workflowRuns: {
         ...get().workflowRuns,
