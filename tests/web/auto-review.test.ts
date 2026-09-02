@@ -574,6 +574,18 @@ describe("自动审阅（AN-026）", () => {
     expect(store.getState().autoReview["n1"]?.enabled).toBe(false);
   });
 
+  it("AN-035 缓存陈旧防误伤：缓存标 candidate 但库中已 accepted → 不再重复 accept", async () => {
+    backend.candidates[0].status = "accepted"; // 库里已接受
+    // 内存缓存停留在旧状态（"candidate"）。
+    store.setState({ candidates: { c1: [{ ...backend.candidates[0], status: "candidate" }] } });
+    enableAuto();
+    await store.getState().tickAutoReview("n1");
+    // 以库为准：不再对已审候选调用 accept（不触发 already-rejected 互搏），
+    // 直接走建议处理分支。
+    expect(backend.calls.acceptAttempts).toHaveLength(0);
+    expect(store.getState().autoReview["n1"]?.enabled).toBe(true);
+  });
+
   it("AN-035 收尾模式：批次 completed 但仍有候选未入正史时继续处理，不提前收工", async () => {
     backend.candidates[0].status = "accepted"; // 第 1 章已完成
     backend.jobs[0].status = "completed";

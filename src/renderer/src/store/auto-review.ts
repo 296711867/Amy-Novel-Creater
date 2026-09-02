@@ -162,15 +162,18 @@ export function createAutoReviewActions(set: NovelStateSet, get: NovelStateGet) 
         });
         if (event) get().appendActivity(event);
       };
+      // 以数据库为准（缓存可能停留在旧状态）：线上形态为缓存说“待审”、
+      // 实际已接受 → 反复 accept 被“already reviewed”拒绝，连续失败自停，
+      // 与巡航的重拉形成互搏死循环。
       const candidate =
         ready?.candidateId === null || ready?.candidateId === undefined
           ? null
-          : Object.values(get().candidates)
-                .flat()
-                .find((item) => item.id === ready.candidateId) ??
-            (
+          : ((
               await platform.listChapterCandidates(ready.chapterId)
-            ).find((item) => item.id === ready.candidateId);
+            ).find((item) => item.id === ready.candidateId) ??
+              Object.values(get().candidates)
+                .flat()
+                .find((item) => item.id === ready.candidateId));
       if (candidate?.status === "candidate") {
         // 质量安全门（AUTOPILOT_WORKFLOW.md §6）：存在未解决的 error 级检查
         // 问题时不得自动接受，交还作者人工处理。
