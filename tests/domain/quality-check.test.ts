@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   assertCandidateAcceptedForCanon,
   checkCandidateQuality,
+  rewriteNotesFrom,
+  shouldAutoRewrite,
 } from "../../src/domain/quality-check";
 const now = "2026-01-01T00:00:00.000Z",
   chapter = {
@@ -86,5 +88,40 @@ describe("candidate quality check", () => {
         foreshadow: [thread],
       }).some((item) => item.category === "foreshadow"),
     ).toBe(true);
+  });
+});
+
+describe("AN-023 审查驱动重写", () => {
+  const err = (id: string) => ({
+    id,
+    severity: "error" as const,
+    category: "length" as const,
+    message: `${id} 问题`,
+    evidence: "依据",
+  });
+  const warn = {
+    id: "w",
+    severity: "warning" as const,
+    category: "character" as const,
+    message: "提醒",
+    evidence: "依据",
+  };
+
+  it("默认关闭；开启后 error 触发、warning 不触发", () => {
+    expect(shouldAutoRewrite([err("e1")], undefined, 0)).toBe(false);
+    expect(shouldAutoRewrite([err("e1")], 2, 0)).toBe(true);
+    expect(shouldAutoRewrite([warn], 2, 0)).toBe(false);
+  });
+
+  it("轮数上限：attempt 达到轮数后不再重写（退回人工审核）", () => {
+    expect(shouldAutoRewrite([err("e1")], 2, 1)).toBe(true);
+    expect(shouldAutoRewrite([err("e1")], 2, 2)).toBe(false);
+  });
+
+  it("修订要求只收 error，逐条编号带依据", () => {
+    const notes = rewriteNotesFrom([err("e1"), warn, err("e2")]);
+    expect(notes).toContain("1. e1 问题（依据：依据）");
+    expect(notes).toContain("2. e2 问题（依据：依据）");
+    expect(notes).not.toContain("提醒");
   });
 });

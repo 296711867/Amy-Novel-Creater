@@ -265,7 +265,12 @@ export interface PlatformPort {
     patch?: Partial<
       Pick<
         GenerationJob,
-        "candidateId" | "inputTokens" | "outputTokens" | "error" | "attempt"
+        | "candidateId"
+        | "inputTokens"
+        | "outputTokens"
+        | "error"
+        | "attempt"
+        | "revisionNotes"
       >
     >,
   ): Promise<GenerationJob>;

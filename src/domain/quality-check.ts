@@ -50,6 +50,35 @@ export function assertCandidateAcceptedForCanon(
   if (candidate?.status !== "accepted")
     throw new Error("请先接受候选稿，再把事实建议写入正史");
 }
+
+/**
+ * AN-023 审查驱动重写：error 级发现自动注入修订要求并重写的轮数上限。
+ * 默认关闭（0）；超出轮数后退回人工审核，绝不自动写入正史。
+ */
+export const DEFAULT_REWRITE_ROUNDS = 2;
+
+/** 是否触发自动重写：开关开启、未超轮数、存在 error 级发现。 */
+export function shouldAutoRewrite(
+  findings: Pick<ContinuityFinding, "severity">[],
+  rounds: number | undefined,
+  attempt: number,
+): boolean {
+  return (
+    (rounds ?? 0) > 0 &&
+    attempt < rounds! &&
+    findings.some((item) => item.severity === "error")
+  );
+}
+
+/** 把 error 发现转成注入重写上下文的修订要求清单。 */
+export function rewriteNotesFrom(
+  findings: ContinuityFinding[],
+): string {
+  return findings
+    .filter((item) => item.severity === "error")
+    .map((item, index) => `${index + 1}. ${item.message}（依据：${item.evidence}）`)
+    .join("\n");
+}
 const includesAny = (content: string, values: string[]) =>
   values.some((value) => value.trim() && content.includes(value.trim()));
 export function checkCandidateQuality(

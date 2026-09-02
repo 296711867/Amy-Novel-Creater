@@ -120,6 +120,11 @@ export interface GenerationPolicy {
    * 并处理正史建议，才继续生成下一章。设为 false 恢复旧的连续生成。
    */
   approvalGate?: boolean;
+  /**
+   * AN-023 审查驱动重写（默认关闭）：error 级质量发现自动注入修订要求
+   * 重写本章的最大轮数；超出后退回人工审核，不自动入正史。
+   */
+  autoRewriteRounds?: number;
 }
 
 export interface GenerationEstimate {

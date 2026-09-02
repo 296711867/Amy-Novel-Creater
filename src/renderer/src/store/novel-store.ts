@@ -67,7 +67,12 @@ import {
 } from "@domain/chapter-generation";
 import { countCjkWords } from "@domain/novel";
 import type { FactProposal, StoredFinding } from "@domain/quality-check";
-import { assertCandidateAcceptedForCanon } from "@domain/quality-check";
+import {
+  assertCandidateAcceptedForCanon,
+  checkCandidateQuality,
+  rewriteNotesFrom,
+  shouldAutoRewrite,
+} from "@domain/quality-check";
 import { parseProposalPayload } from "@domain/fact-extraction";
 import {
   parseNovelProject,
@@ -1815,6 +1820,43 @@ export const useNovelStore = create<NovelState>((set, get) => ({
               message: `补写失败，保留已生成的 ${candidate.wordCount} 字：${continueError instanceof Error ? continueError.message : "未知错误"}`,
               data: {},
             });
+          }
+        }
+        // AN-023 审查驱动重写（Web 端）：error 级质量发现自动注入修订要求
+        // 重写（默认关闭，上限 autoRewriteRounds 轮）。发现不落库（端口无
+        // saveFindings），仅作为重写触发与事件留痕；旧候选稿保留可回看。
+        const rewriteRounds = batch.policy.autoRewriteRounds ?? 0;
+        if (chapter && rewriteRounds > 0) {
+          const qualityFindings = checkCandidateQuality({
+            chapter,
+            content: candidate.content,
+            scenes: (get().scenes[batch.novelId] ?? []).filter(
+              (item) => item.chapterId === chapter.id,
+            ),
+            entities: get().entities[batch.novelId] ?? [],
+            foreshadow: get().foreshadowThreads[batch.novelId] ?? [],
+          });
+          if (shouldAutoRewrite(qualityFindings, rewriteRounds, job.attempt)) {
+            const errors = qualityFindings.filter(
+              (item) => item.severity === "error",
+            );
+            await platform.updateGenerationJob(job.id, "queued", {
+              candidateId: null,
+              attempt: job.attempt + 1,
+              error: "",
+              revisionNotes: `上一稿质量审查发现 ${errors.length} 项 error，重写时必须逐项解决，同时保持与正史一致：\n${rewriteNotesFrom(qualityFindings)}`,
+            });
+            await emit({
+              batchId,
+              novelId: batch.novelId,
+              chapterId: chapter.id,
+              stage: "quality_check",
+              level: "warning",
+              message: `error ${errors.length} 项，自动重写第 ${job.attempt + 1}/${rewriteRounds} 轮（修订要求已注入重写上下文）`,
+              data: { attempt: job.attempt + 1, rewriteRounds },
+            });
+            jobs = await get().loadJobs(batchId);
+            continue;
           }
         }
         await platform.updateGenerationJob(job.id, "candidate_ready", {

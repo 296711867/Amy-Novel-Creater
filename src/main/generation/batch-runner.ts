@@ -20,7 +20,11 @@ import type { UsageMeasurement } from "@domain/usage";
 import type { NovelDatabase } from "../db/database";
 import type { SecretVault } from "../security/secret-vault";
 import { streamOpenAICompatible } from "../model/openai-compatible";
-import { checkCandidateQuality } from "@domain/quality-check";
+import {
+  checkCandidateQuality,
+  rewriteNotesFrom,
+  shouldAutoRewrite,
+} from "@domain/quality-check";
 import {
   factExtractionPrompt,
   parseFactExtraction,
@@ -572,6 +576,30 @@ export class BatchRunner {
           })),
         },
       });
+      // AN-023 审查驱动重写：error 级发现自动注入修订要求重写本章
+      // （默认关闭；最多 autoRewriteRounds 轮，超出退回人工审核；
+      // 旧候选稿保留在历史中，接受时另有章节快照可回滚）。
+      const rewriteRounds = current.policy.autoRewriteRounds ?? 0;
+      if (shouldAutoRewrite(qualityFindings, rewriteRounds, job.attempt)) {
+        const errors = qualityFindings.filter(
+          (item) => item.severity === "error",
+        );
+        await this.database.updateGenerationJob(job.id, "waiting_retry", {
+          candidateId: null,
+          attempt: job.attempt + 1,
+          error: "",
+          revisionNotes: `上一稿质量审查发现 ${errors.length} 项 error，重写时必须逐项解决，同时保持与正史一致：\n${rewriteNotesFrom(qualityFindings)}`,
+        });
+        await this.emit({
+          ...base,
+          chapterId: chapter.id,
+          stage: "quality_check",
+          level: "warning",
+          message: `error ${errors.length} 项，自动重写第 ${job.attempt + 1}/${rewriteRounds} 轮（修订要求已注入重写上下文）`,
+          data: { attempt: job.attempt + 1, rewriteRounds },
+        });
+        return;
+      }
       await this.recordUsage(current, profile, chapter.id, "generation", {
         inputTokens,
         outputTokens,

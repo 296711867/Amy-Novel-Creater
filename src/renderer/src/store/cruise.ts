@@ -198,6 +198,9 @@ export function createCruiseActions(set: NovelStateSet, get: NovelStateGet) {
           outputTokenBudget: 120000,
           concurrency: 1,
           deepThinking: false,
+          // AN-023：巡航无人值守，error 稿自动重写最多 2 轮；重写后仍有
+          // error 时自动接受的质量门会拦下并暂停转人工。
+          autoRewriteRounds: 2,
         }, startChapter > 1 ? "structure" : undefined);
         noteCruise(novelId, `开始规划第 ${startChapter}–${endChapter} 章…`);
         return;

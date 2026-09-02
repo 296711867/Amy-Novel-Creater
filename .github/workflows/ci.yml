@@ -1,0 +1,38 @@
+# AN-014 CI：PR/推送运行 pnpm check（类型 + 全量测试）；
+# release 分支与 v* 标签追加 pnpm verify（check + Web/Electron 双端生产构建）。
+# 失败阻止合并需在 GitHub 仓库设置里把 check/build 设为必需状态检查。
+name: CI
+
+on:
+  push:
+    branches: [main, release]
+    tags: ["v*"]
+  pull_request:
+
+jobs:
+  check:
+    name: check (typecheck + tests)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm check
+
+  verify:
+    name: verify (dual-platform build)
+    if: github.ref == 'refs/heads/release' || startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm verify

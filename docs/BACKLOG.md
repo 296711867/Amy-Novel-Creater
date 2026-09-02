@@ -39,6 +39,19 @@ plan_review 策划包（建批次门禁自愈）；③ running 分支批次终�
 222 项测试通过；41–70 章真实数据端到端连跑成功，循环体全流程文档化到
 AUTOPILOT_WORKFLOW §6.3。
 
+2026-09-02（晚）：挂账问题清零行动。AN-037 书稿阅读/导出（作品卡片按钮 +
+连读页导出）与卡片布局美化；AN-036 SQLite 写锁挂起根治（WAL+busy_timeout
+连接卫生、20s 操作守卫快速失败、事件驱动锁探测+自动重开连接，端到端测试
+覆盖）；AN-038 伏笔/时间线上下文瘦身（175 条开放伏笔与全量时间线限量注入，
+久埋伏笔优先回收，第 61 章曾膨胀到 10.6 万 tokens）；AN-021 版本化记忆收口
+（stale-memory 记忆体检 + 上下文待复核前缀 + 候选 0 正史建议警示）；AN-023
+审查驱动重写闭环（error 自动重写≤N 轮，默认关，巡航/自动运行开 2 轮）；
+AN-014 CI 工作流（check 常跑 + release 双构建）。附带修复：数据库仓库字段
+显式类型化暴露隐性 any 掩盖的类型错误（含 novel-ipc 圣经标签引用不存在的
+title 字段——运行时全局审查提示词的圣经标签一直是 undefined）。全套 245
+项测试通过。AN-013（二）大文件拆分（web-platform/PlanningWorkflowPage/
+novel-store 续切）为可维护性重构，非缺陷，留待后续按切片工厂模式继续。
+
 2026-09-02：用户 1–20 章全部完成后提出“全局整体查看+整体微调”。数据实证了记忆债
 务（伏笔 84 条未回收 82、状态同章重复/矛盾、142 条建议零人工过目）。AN-030~034
 整批落地：故事总览仪表盘（零 token 聚合 + 记忆体检）、记忆清理（重复状态合并、
@@ -67,7 +80,7 @@ AUTOPILOT_WORKFLOW §6.3。
 | AN-011 | [x] | PlatformPort 双端契约测试 | `tests/contract/platform-port.contract.ts` 同一组 7 项用例分别驱动 Electron（NovelDatabase，经 novel-ipc 同款方法映射）与 Web（webPlatform + IndexedDB）：ready 门、cycleSize 归一化、CJK 字数与版本快照、第 9 步门禁错误语义、workflow run DTO、文风模板、项目包导入与短引用重映射 | 双端 14 项契约用例通过（并验证孤儿提案按 cycleId 过滤的规则两端一致）；`pnpm verify` 通过（132 项测试） |
 | AN-012 | [x] | IPC 运行时校验和 Electron 导航安全 | `registerNovelIpc` 入口统一包裹写通道守卫表（ipc-guard 组合子 + ipc-write-guards，约 50 个写通道含付费生成调用）；`window-security.ts` 纯函数策略接入 will-navigate / setWindowOpenHandler（外链转系统浏览器）；双端入口 html 配置差异化 CSP（Electron 渲染层零网络，Web 放开模型端点） | 守卫表完整性、类型攻击拒绝、导航前缀逃逸、新窗口决策与双端 CSP 断言共 9 项测试通过；`pnpm verify` 通过且双端构建产物含 CSP |
 | AN-013 | [~] | 拆分前端热点文件并按路由懒加载 | 2026-09-02 完成第一批：① 13 个页面 React.lazy 按路由分包（HashRouter，file:// 与 Web 均验证）；② 双端 vite manualChunks（vendor-react 232KB / vendor-zod 140KB / vendor-icons 22KB），并修复 electron-vite renderer 生产构建未压缩问题（原 1.39MB 主包 → 入口 190KB）；③ novel-store（2,760 行）按业务边界拆出 store/auto-review.ts（281）、store/cruise.ts（348）、store/global-review.ts（132）+ utils，主文件降至 2,033 行，对外导出（useNovelStore/NovelState）不变 | 剩余：novel-store 仍 >2,000 行（可再切批次/工作流运行段）、web-platform.ts 2,455 行与 PlanningWorkflowPage 1,505 行未拆；已达成部分：构建无 500KB 警告（全部 chunk <500KB）、懒加载落地、行为测试不退化（214 项通过）；继续拆分时沿用切片工厂 + 共享 utils 模式 |
-| AN-014 | [ ] | 建立可重复 CI | 本地已有 `pnpm check` / `pnpm verify`，仓库暂无 CI 工作流 | PR/推送运行 check；发布分支运行双构建；缓存 pnpm；失败阻止合并 |
+| AN-014 | [x] | 建立可重复 CI | `.github/workflows/ci.yml`（2026-09-02）：PR/推送到 main 运行 `pnpm check`（typecheck:node+web 与全量测试）；release 分支与 v* 标签追加 `pnpm verify`（check + Web/Electron 双端生产构建）；pnpm/action-setup 按 package.json 的 pnpm@11.19.0 安装、setup-node 缓存 pnpm store、`--frozen-lockfile` 锁定依赖 | 工作流语法由 YAML 结构核对（本地无 GitHub Runner）；「失败阻止合并」需在 GitHub 仓库 Settings→Branches 把 check（及 release 的 verify）设为必需状态检查——这步只能在仓库设置里做，非仓库文件可表达。首次推送后确认运行绿 |
 | AN-015 | [!] | Windows 商业签名与自动更新 | 需要证书和发布源，不属于仓库内可独立完成事项 | 用户提供证书/发布渠道后，签名安装包和更新回滚冒烟通过 |
 | AN-025 | [x] | 规划页白屏修复与渲染层崩溃兜底 | 三处 selector 兜底 `?? []` 改为模块级常量（`PlanningWorkflowPage` 的 activityEvents、`App.tsx` GeneratePage 的 planningCycles、`BatchesPage` ActivityLog 的 activityEvents）；`main.tsx` 增加全局 `ErrorBoundary`（返回首页/重新加载），任何页面级渲染异常不再整站白屏；规范新增 Renderer selector 稳定引用硬规则（`DEVELOPMENT_GUIDE.md` §6/§7） | `tests/web/planning-workflow-mount.test.tsx` 在空数据状态整页挂载规划页：旧写法失败、新写法通过（双向验证）；`pnpm check` 通过（148 项测试）；浏览器复现路径（首页→点击作品→规划页第 1/10 步正常渲染）验证通过，见 `ACCEPTANCE_REPORT.md` 2026-08-31 |
 
@@ -78,7 +91,7 @@ AUTOPILOT_WORKFLOW §6.3。
 | AN-020 | [x] | 文风模板库 | 已有 Domain、SQLite/Web、IPC/Preload、模板页、单章/批量应用和域/数据库测试；样章只在本地保存，生成只注入抽象风格卡 | 当前自动化检查通过；真实模型效果留待专项评估 |
 | AN-021 | [x] | 版本化记忆 | 三项验收全部落地（2026-09-02）：①派生记忆失效传播——`story-overview` 记忆体检新增 `stale-memory`（派生判定：已入正史章节 updatedAt 晚于记忆记录 updatedAt 即"正文在记忆回写后被修改"，人物状态/时间线/伏笔按章聚合提示复核，连续性页「记忆过期」标签），`context-pack` 注入时该类记录带【待复核】前缀提示模型谨慎采信（双端 batch-runner/novel-store 接线 chapterUpdatedAtById）；②后续候选失效——`staleEarlierChapterTitle` + 「按最新前文重写本章」（既有能力，验收确认）；③项目包版本链——project-export 含 ChapterVersion[]（既有能力，验收确认）；④0 提案警示——候选审阅页 0 条正史建议时显示警示条（引用 2026-08-31 评估形态，提示改稿或手动补录，接受前后文案区分）。章节摘要/关系版本属于尚未提取的记忆种类，待未来模型能力扩展时随类型一并纳入失效传播 | `tests/domain/story-overview.test.ts` 新增 2 项（按章聚合三类记录+targetIds；新鲜记忆/草稿章编辑不误报）；`tests/domain/context-pack.test.ts` 新增 1 项（stale 带【待复核】前缀、fresh 不带）；`pnpm check` 通过 |
 | AN-022 | [x] | Autopilot Workflow Runner | `workflow_runs` 表与 `run-workflow.ts` 编排已落地，复用现有规划器和 BatchRunner；三档检查点（阶段/提案/章节审核）、批次事件驱动的状态收敛、失败重试与断点恢复、规划页运行台均已实现，运行语义见 `AUTOPILOT_WORKFLOW.md` 6.1 | 三档模式暂停点、提案门禁、重试耗尽、失败恢复重置预算、双端批次收敛差异的编排测试与 SQLite 持久化用例通过；`pnpm verify` 通过（115 项测试，双端生产构建）；真实模型 autopilot 全流程评估通过（两轮驱动、候选不入正史、预算 4.7k/80k），记录见 `ACCEPTANCE_REPORT.md` 2026-08-31 |
-| AN-023 | [ ] | 审查驱动重写与可选自动采纳 | 尚无自动重写闭环；默认不得自动写正史 | error 反馈最多 N 次；默认关闭自动采纳；启用时满足质量门槛并保留回滚版本 |
+| AN-023 | [x] | 审查驱动重写与可选自动采纳 | 闭环落地（2026-09-02）：`domain/quality-check.ts` 新增 shouldAutoRewrite（默认关闭=0 轮；仅 error 级触发；attempt<轮数 上限）与 rewriteNotesFrom（error 逐条编号+依据 → 注入重写上下文的「审查修订要求」，复用既有 revisionNotes→buildContext 通道）。执行器双端接线：Electron batch-runner 在质量检查后 error 未清时把任务重排队（candidateId 清空、attempt+1、revisionNotes=修订清单，旧候选稿保留可回看），Web runJob 同构（发现不落库、瞬时检查，事件留痕）；轮数耗尽退回 candidate_ready 人工审核。策略：GenerationPolicy.autoRewriteRounds（默认 undefined=关）；无人值守的巡航与规划页自动运行显式开启 2 轮。质量门（error 未解决不得自动接受，AN-026 §既有）与回滚（旧候选历史 + 接受时章节快照）沿用既有能力，验收确认。已知边界：Web 端端口无 saveFindings，质量发现不落库（面板仅 Electron），后续如需 Web 发现面板再扩端口 | `tests/domain/quality-check.test.ts` 新增 3 项（默认关/仅 error 触发/轮数上限/修订清单只收 error）；端口 updateGenerationJob patch 补 revisionNotes（此前靠 spread 绕过类型检查）；`pnpm check` 通过 |
 | AN-024 | [x] | 人物阵容建议与运行日志 | 域测试覆盖解析与过滤；`tests/web/web-advisory-chain.test.ts` 走真实 webPlatform + stub fetch 全链路（别名命中、extra/未知人物过滤、请求载荷与会话密钥、非 200 错误可读）；`tests/web/persona-panel.test.tsx` 覆盖推荐→调整→批量确认写入正式设定的 UI 回归 | `pnpm verify`、关键 UI 回归与双端契约（AN-011 契约套件 + 共享解析域测试）通过 |
 | AN-026 | [x] | 自动接受并连续创作（委托审阅）+ 审阅界面可用性修复 | store 新增 `setAutoReview`/`tickAutoReview`（2 秒轮询）：接受候选稿 → 接受全部正史建议 → 自动恢复批次写下一章；error 级 findings 未解决时暂停交还人工，批次完成/候选被拒/连续 3 次失败自动关闭；`auto_review` 事件留痕。UI：工作台开关与状态条、生成配置页“全自动连续创作”开关（章数沿用任务范围）、建议列表“全部接受”按钮、候选稿未接受时的禁用样式与解锁提示条（修复“按钮看着能点点不动”）。运行语义见 `AUTOPILOT_WORKFLOW.md` §6.2 | `tests/web/auto-review.test.ts` 覆盖完整循环/质量门/失败自停/拒绝让位/开关同步（5 项）；`tests/web/auto-review-ui.test.tsx` 覆盖三处 UI 接线（3 项）；`pnpm check` 通过（155 项测试）；字数 90% 门槛留待 AN-023 联动 |
 | AN-027 | [x] | 全局一致性审查 harness（章节入正史后的全局校验与修复提案） | ① `domain/global-consistency.ts`：确定性校验器（悬空引用/位置跳变/道具重复持有/伏笔超期/别名冲突/停用实体仍有状态，零 token），每条建议入正史后增量跑、封存周期前全量跑（PlanningWorkflowPage finishCycle 门禁），error 级发现接入 AN-026 自动接受质量门（`collectGlobalErrors`）；② AI 语义审查：`reviewGlobalConsistency` 端口（Web/Electron 双端），复用 Context Pack 预算装配全局审查包，产出 findings（忽略状态可跨轮延续）与设定修复提案（走 planning_proposals，cycleId=global-review，人工审核）；③ 重写联动：GlobalFinding → `regenerateGenerationJob(revisionNotes)` 注入「审查修订要求」上下文源；任务/批次链路携带 `revisionNotes`（generation_jobs 新列 + 双端读写）。UI：连续性页「全局审查」视图（发现分级列表、忽略、按反馈重写第 N 章、修复提案审核）。global_findings 表 + 索引迁移，契约测试双端 16 项含 findings 往返。线上事故修复：别名冲突规则对同一实体组逐名称键重复产出同 id，导致 saveGlobalFindings 主键冲突整批回滚（用户库中校验结果一直存不下来）——已改为按实体组合并去重 + 校验器输出与 AI 解析双重 id 去重（AN-028 域回归） | `tests/domain/global-consistency.test.ts` 12 项（规则一正一反 + id 唯一不变量 + AI 解析去重）；`tests/web/global-review-chain.test.ts` 真实 webPlatform 全链路；`tests/web/auto-review.test.ts` 全局门用例；`tests/contract` 双端 findings 往返；`tests/main/database.test.ts` 迁移与 revisionNotes 留痕；`pnpm check` 通过（177 项测试）；真实模型审查效果需专项评估 |
