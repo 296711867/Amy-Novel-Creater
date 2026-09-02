@@ -67,7 +67,8 @@ export type MemoryIssueKind =
   | "duplicate-state"
   | "multi-state-chapter"
   | "overdue-foreshadow"
-  | "dangling-ref";
+  | "dangling-ref"
+  | "stale-memory";
 
 export interface MemoryIssue {
   kind: MemoryIssueKind;
@@ -271,6 +272,57 @@ export function buildStoryOverview(
         message: "一条人物状态指向不存在的人物实体（悬空引用），需删除或补建实体。",
         targetIds: [state.id],
       });
+
+  // AN-021 版本化记忆：正文改写后，源自旧正文的派生记忆可识别为过期。
+  // 判定是派生的（无入库标记）：已入正史章节的 updatedAt 晚于记忆记录的
+  // updatedAt，即"正文在记忆回写之后被修改过"。全局修订/审查重写/手动
+  // 改稿都会触发；命中只提示复核，不自动删除。
+  const editedAfter = (chapterId: string | null, itemUpdatedAt: string) => {
+    if (!chapterId) return false;
+    const chapter = chapterById.get(chapterId);
+    return chapter?.status === "accepted" && chapter.updatedAt > itemUpdatedAt;
+  };
+  const staleByChapter = new Map<
+    string,
+    { states: string[]; timeline: string[]; foreshadow: string[] }
+  >();
+  const collectStale = <T extends { id: string; updatedAt: string }>(
+    items: T[],
+    chapterIdOf: (item: T) => string | null,
+    kind: "states" | "timeline" | "foreshadow",
+  ) => {
+    for (const item of items) {
+      const chapterId = chapterIdOf(item);
+      if (!chapterId || !editedAfter(chapterId, item.updatedAt)) continue;
+      const entry = staleByChapter.get(chapterId) ?? {
+        states: [],
+        timeline: [],
+        foreshadow: [],
+      };
+      entry[kind].push(item.id);
+      staleByChapter.set(chapterId, entry);
+    }
+  };
+  collectStale(
+    input.characterStates,
+    (item) => item.chapterId,
+    "states",
+  );
+  collectStale(input.timeline, (item) => item.chapterId, "timeline");
+  collectStale(input.foreshadow, (item) => item.setupChapterId, "foreshadow");
+  for (const [chapterId, counts] of staleByChapter) {
+    const parts = [
+      counts.states.length && `${counts.states.length} 条人物状态`,
+      counts.timeline.length && `${counts.timeline.length} 条时间线`,
+      counts.foreshadow.length && `${counts.foreshadow.length} 条伏笔`,
+    ].filter(Boolean);
+    issues.push({
+      kind: "stale-memory",
+      severity: "warning",
+      message: `第 ${positionOf(chapterId)} 章正文在记忆回写后被修改过：${parts.join("、")}可能基于旧正文，请复核（重写章节后建议重跑提取或人工修正）。`,
+      targetIds: [...counts.states, ...counts.timeline, ...counts.foreshadow],
+    });
+  }
 
   const accepted = chapters.filter((item) => item.status === "accepted");
   return {

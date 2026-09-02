@@ -249,3 +249,52 @@ describe("记忆体检（AN-033）", () => {
     expect(overview.issues).toEqual([]);
   });
 });
+
+describe("AN-021 版本化记忆：改写章节后的派生记忆过期标记", () => {
+  const later = "2026-09-02T12:00:00.000Z";
+
+  it("正文改写晚于记忆回写 → stale-memory（按章聚合三类记录）", () => {
+    const input = baseInput();
+    // 第 2 章在记忆回写后被修改（全局修订/审查重写/手动改稿形态）。
+    input.chapters[1] = { ...input.chapters[1], updatedAt: later };
+    const overview = buildStoryOverview({
+      ...input,
+      characterStates: [
+        state("s1", "e1", "c2", "改写前的状态"),
+        state("s2", "e1", "c1", "未受影响"),
+      ],
+      timeline: [event("t1", "c2", ["e1"])],
+      foreshadow: [thread("f1", "改写前埋的线", "c2")],
+    });
+    const stale = overview.issues.filter((item) => item.kind === "stale-memory");
+    expect(stale).toHaveLength(1);
+    expect(stale[0].severity).toBe("warning");
+    expect(stale[0].message).toContain("第 2 章");
+    expect(stale[0].message).toContain("1 条人物状态");
+    expect(stale[0].message).toContain("1 条时间线");
+    expect(stale[0].message).toContain("1 条伏笔");
+    expect(stale[0].targetIds).toEqual(["s1", "t1", "f1"]);
+  });
+
+  it("记忆回写晚于正文修改（或时间相同）不算过期；未入正史的章节编辑不标记", () => {
+    const input = baseInput();
+    input.chapters[1] = { ...input.chapters[1], updatedAt: later };
+    input.chapters[2] = {
+      ...input.chapters[2],
+      status: "draft",
+      updatedAt: later,
+    };
+    const overview = buildStoryOverview({
+      ...input,
+      characterStates: [
+        // 回写发生在修改之后 → 有效。
+        { ...state("s1", "e1", "c2", "新鲜记忆"), updatedAt: later },
+        // 所属章是草稿（编辑未入正史）→ 不标记。
+        state("s2", "e1", "c3", "草稿章记忆"),
+      ],
+    });
+    expect(
+      overview.issues.some((item) => item.kind === "stale-memory"),
+    ).toBe(false);
+  });
+});

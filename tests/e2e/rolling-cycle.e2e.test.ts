@@ -282,6 +282,9 @@ async function acceptCandidateWithMemory(candidateId: string) {
           chapterId: chapter.id,
           summary: parsed.payload.summary,
           location: parsed.payload.location,
+          appearance: "",
+          outfit: "",
+          identity: "",
           physical: parsed.payload.physical,
           emotional: parsed.payload.emotional,
           knowledge: parsed.payload.knowledge,
@@ -653,7 +656,7 @@ describe.skipIf(!REAL)("真实 API：滚动十章 1-10 生成 → 封存 → 11-
         db.listForeshadowThreads(novelId),
         db.listStoryEntities(novelId, "character"),
       ]);
-      const positionOf = (chapterId: string) =>
+      const positionOf = (chapterId: string | null) =>
         chapters.find((item) => item.id === chapterId)?.position ?? 0;
       const latest = new Map<string, (typeof states)[number]>();
       for (const state of states) {

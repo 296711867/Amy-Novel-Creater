@@ -389,7 +389,9 @@ export function ContinuityPage(): React.JSX.Element {
                           ? "同章多状态"
                           : issue.kind === "overdue-foreshadow"
                             ? "伏笔超期"
-                            : "悬空引用"}
+                            : issue.kind === "stale-memory"
+                              ? "记忆过期"
+                              : "悬空引用"}
                     </i>
                     <b>{issue.message.slice(0, 26)}…</b>
                   </button>

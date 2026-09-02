@@ -175,6 +175,77 @@ describe("AN-038 伏笔/时间线上下文瘦身", () => {
       without.sources.some((item) => item.id === "foreshadow-guidance"),
     ).toBe(false);
   });
+
+  it("AN-021 待复核标注：正文改写后的记忆注入时带过期前缀", () => {
+    const now = "2026-01-01T00:00:00.000Z";
+    const mkState = (id: string, updatedAt: string) => ({
+      id,
+      novelId: "n",
+      characterId: "e1",
+      chapterId: "c1",
+      summary: `${id} 状态`,
+      location: "",
+      appearance: "",
+      outfit: "",
+      identity: "",
+      physical: "",
+      emotional: "",
+      knowledge: [],
+      goals: [],
+      inventory: [],
+      skills: [],
+      source: "accepted_chapter" as const,
+      createdAt: updatedAt,
+      updatedAt,
+    });
+    const pack = buildContextPack({
+      novel: {
+        id: "n",
+        title: "长夜",
+        genre: "科幻",
+        premise: "",
+        targetWords: 3000,
+        targetChapters: 1,
+        chapterWords: 3000,
+        cycleSize: 10,
+        status: "planning",
+        createdAt: now,
+        updatedAt: now,
+      },
+      chapter: {
+        id: "c",
+        novelId: "n",
+        volumeId: null,
+        position: 2,
+        title: "第二章",
+        outline: "",
+        status: "planned",
+        targetWords: 3000,
+        content: "",
+        wordCount: 0,
+        updatedAt: now,
+      },
+      scenes: [],
+      bible: [],
+      entities: [],
+      timeline: [],
+      foreshadow: [],
+      characterStates: [
+        mkState("stale", "2026-01-01T00:00:00.000Z"),
+        mkState("fresh", "2026-06-01T00:00:00.000Z"),
+      ],
+      recentChapters: [],
+      inputBudget: 4000,
+      outputTokensReserved: 100,
+      // 第 1 章正文在 3 月被改写：stale（1 月回写）过期，fresh（6 月回写）有效。
+      chapterUpdatedAtById: new Map([["c1", "2026-03-01T00:00:00.000Z"]]),
+    });
+    const staleSource = pack.sources.find((item) => item.id === "stale"),
+      freshSource = pack.sources.find((item) => item.id === "fresh");
+    expect(staleSource?.status).not.toBe("omitted");
+    expect(staleSource?.text).toContain("待复核");
+    expect(freshSource?.text).not.toContain("待复核");
+  });
 });
 
 describe("context pack", () => {

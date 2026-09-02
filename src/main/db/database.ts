@@ -134,7 +134,7 @@ export class NovelDatabase {
     this.recoveryInFlight = true;
     void (async () => {
       let reconnected = false;
-      let message: string;
+      let message = "";
       try {
         const healthy = await probeWriteLock(this.rawClient, 3_000);
         if (healthy) {

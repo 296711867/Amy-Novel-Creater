@@ -59,6 +59,12 @@ export interface ContextPackInput {
   namePoolHint?: string;
   /** 审查驱动的修订要求（AN-023/AN-027）：按最新正史重写本章时注入。 */
   revisionNotes?: string;
+  /**
+   * AN-021 版本化记忆：章节 updatedAt 索引。记忆记录所属章节的正文在
+   * 记忆回写后被修改过时，该条注入文本带「待复核」前缀，提示模型不要
+   * 把可能过期的状态当成确定事实。
+   */
+  chapterUpdatedAtById?: Map<string, string>;
 }
 
 export function estimateTokens(text: string): number {
@@ -226,6 +232,13 @@ export function trimAtBoundary(text: string, maxChars: number): string {
   return window;
 }
 export function buildContextPack(input: ContextPackInput): ContextPack {
+  // AN-021：正文改写后，源自旧正文的记忆注入时带「待复核」前缀。
+  const stalePrefix = (chapterId: string | null, itemUpdatedAt: string) =>
+    chapterId &&
+    input.chapterUpdatedAtById?.get(chapterId) !== undefined &&
+    input.chapterUpdatedAtById.get(chapterId)! > itemUpdatedAt
+      ? "【待复核：该章正文在记忆回写后被修改，此记录可能过期】\n"
+      : "";
   const sources: ContextSource[] = [
     {
       id: "instruction",
@@ -346,7 +359,7 @@ export function buildContextPack(input: ContextPackInput): ContextPack {
         label: `伏笔 · ${item.title}`,
         priority: 84,
         required: false,
-        text: `状态：${item.status}\n${item.detail}`,
+        text: `${stalePrefix(item.setupChapterId, item.updatedAt)}状态：${item.status}\n${item.detail}`,
       })),
     ...input.timeline.map((item) => ({
       id: item.id,
@@ -354,7 +367,7 @@ export function buildContextPack(input: ContextPackInput): ContextPack {
       label: `时间线 · ${item.title}`,
       priority: 82,
       required: false,
-      text: `${item.storyTime}\n${item.detail}`,
+      text: `${stalePrefix(item.chapterId, item.updatedAt)}${item.storyTime}\n${item.detail}`,
     })),
     ...input.characterStates.map((item) => ({
       id: item.id,
@@ -362,19 +375,21 @@ export function buildContextPack(input: ContextPackInput): ContextPack {
       label: "角色当前状态",
       priority: 86,
       required: false,
-      text: [
-        item.summary,
-        `位置：${item.location}；身体：${item.physical}；情绪：${item.emotional}`,
-        item.appearance && `外貌：${item.appearance}`,
-        item.outfit && `衣着：${item.outfit}`,
-        item.identity && `身份：${item.identity}`,
-        `目标：${item.goals.join("、")}`,
-        `已知：${item.knowledge.join("、")}`,
-        `物品：${item.inventory.join("、")}`,
-        `技能：${item.skills.join("、")}`,
-      ]
-        .filter(Boolean)
-        .join("\n"),
+      text:
+        stalePrefix(item.chapterId, item.updatedAt) +
+        [
+          item.summary,
+          `位置：${item.location}；身体：${item.physical}；情绪：${item.emotional}`,
+          item.appearance && `外貌：${item.appearance}`,
+          item.outfit && `衣着：${item.outfit}`,
+          item.identity && `身份：${item.identity}`,
+          `目标：${item.goals.join("、")}`,
+          `已知：${item.knowledge.join("、")}`,
+          `物品：${item.inventory.join("、")}`,
+          `技能：${item.skills.join("、")}`,
+        ]
+          .filter(Boolean)
+          .join("\n"),
     })),
     ...input.recentChapters.map((item) => ({
       id: item.id,

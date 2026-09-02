@@ -298,6 +298,9 @@ export class BatchRunner {
       const positionById = new Map<string, number>(
           chapters.map((item) => [item.id, item.position] as [string, number]),
         ),
+        chapterUpdatedAtById = new Map<string, string>(
+          chapters.map((item) => [item.id, item.updatedAt] as [string, string]),
+        ),
         // 只带“截至上一章”的每人最新状态：外貌/衣着/身份/伤势演进不回退。
         states = selectCharacterStates(
           allStates,
@@ -402,6 +405,7 @@ export class BatchRunner {
         outputTokensReserved: output,
         namePoolHint: pool.usedNames.length ? namePoolText(pool) : undefined,
         revisionNotes: job.revisionNotes,
+        chapterUpdatedAtById,
       });
       await this.database.saveContextSnapshot(current.novelId, pack);
       await this.emit({

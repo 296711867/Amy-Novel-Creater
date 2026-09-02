@@ -690,6 +690,18 @@ function ChapterPane({
           ))}
         </div>
       )}
+      {proposals.length === 0 && (
+        <div className="stale-warning">
+          <AlertTriangle size={15} />
+          <span>
+            本章候选稿<strong>没有提取到任何正史建议</strong>
+            （2026-08-31 评估形态）：接受后不会有记忆回写，人物状态/时间线/伏笔都不会更新。
+            {candidate.status === "candidate"
+              ? "建议先改稿重试，或接受后在「连续性」页手动补录本章记忆。"
+              : "可在「连续性」页手动补录本章记忆。"}
+          </span>
+        </div>
+      )}
       {proposals.length > 0 && (
         <div className="proposal-list">
           <h4>

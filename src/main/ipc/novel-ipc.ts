@@ -549,7 +549,9 @@ export function registerNovelIpc(
           novelTitle: novel.title,
           genre: novel.genre,
           bible: bible.map((item) => ({
-            title: item.title,
+            // BibleSection 没有 title 字段（旧代码引用了不存在的字段，
+            // 运行时标签恒为 undefined）；用 kind 作为展示标签。
+            title: item.kind,
             content: item.content,
           })),
           entities,

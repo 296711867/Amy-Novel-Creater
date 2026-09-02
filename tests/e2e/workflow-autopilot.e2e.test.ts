@@ -479,6 +479,7 @@ describe.skipIf(!REAL)("真实 API：Workflow Runner 全自动运行（autopilot
       expect(run.batchId).toBeTruthy();
 
       const batch = await db.getGenerationBatch(run.batchId!);
+      if (!batch) throw new Error("batch missing");
       expect(batch.status).toBe("completed");
       const jobs = (await db.listGenerationJobs(batch.id)).sort(
         (a, b) => a.position - b.position,

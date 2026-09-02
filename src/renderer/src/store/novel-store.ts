@@ -1057,6 +1057,9 @@ export const useNovelStore = create<NovelState>((set, get) => ({
       positionById = new Map<string, number>(
         chapters.map((item) => [item.id, item.position] as [string, number]),
       ),
+      chapterUpdatedAtById = new Map<string, string>(
+        chapters.map((item) => [item.id, item.updatedAt] as [string, string]),
+      ),
       recent = selectRecentChapters(
         chapters,
         chapter.position,
@@ -1089,6 +1092,7 @@ export const useNovelStore = create<NovelState>((set, get) => ({
       recentChapters: recent,
       inputBudget,
       outputTokensReserved: outputReserved,
+      chapterUpdatedAtById,
       ...(revisionNotes?.trim() ? { revisionNotes: revisionNotes.trim() } : {}),
     });
     await platform.saveContextSnapshot(novelId, pack);

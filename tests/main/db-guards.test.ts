@@ -85,7 +85,7 @@ describe("AN-036 数据库写锁防线", () => {
       /数据库操作超时.*写入锁挂起/,
     );
     await expect(
-      guarded.batch([{ sql: "UPDATE t SET x=1" }], "write"),
+      guarded.batch([{ sql: "UPDATE t SET x=1", args: [] }], "write"),
     ).rejects.toThrow(/超时/);
     expect(onStall).toHaveBeenCalled();
   });

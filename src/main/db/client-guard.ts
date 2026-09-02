@@ -92,7 +92,10 @@ export function createGuardedClient(
   const timeoutMs = options.timeoutMs ?? DB_WRITE_TIMEOUT_MS;
   const guard = <T>(promise: Promise<T>, label: string): Promise<T> =>
     withTimeout(promise, timeoutMs, label, options.onStall);
-  const client: Client = {
+  // 展开原客户端保留 libsql 其余表面（migrate/sync/closed/protocol 等），
+  // 再覆盖仓库层用到的四个方法为带超时版本。
+  const client = {
+    ...(raw as unknown as Record<string, unknown>),
     execute: (stmt: Parameters<Client["execute"]>[0]) =>
       guard(
         raw.execute(stmt),
@@ -100,14 +103,14 @@ export function createGuardedClient(
       ),
     executeMultiple: (sql: Parameters<Client["executeMultiple"]>[0]) =>
       guard(raw.executeMultiple(sql), `executeMultiple ${sqlLabel(sql)}`),
-    batch: (stmts: Parameters<Client["batch"]>[0], mode?: Parameters<Client["batch"]>[1]) =>
+    batch: (
+      stmts: Parameters<Client["batch"]>[0],
+      mode?: Parameters<Client["batch"]>[1],
+    ) =>
       guard(
         raw.batch(stmts, mode),
         `batch(${Array.isArray(stmts) ? stmts.length : 1} stmts, ${mode ?? "deferred"})`,
       ),
-    transaction: ((...args: unknown[]) =>
-      // 透传 libsql 原生事务 API（当前仓库层未使用，仅保接口完整）
-      (raw as unknown as Client).transaction(...(args as []))) as Client["transaction"],
     close: () => raw.close(),
   };
   return client as unknown as Client;
