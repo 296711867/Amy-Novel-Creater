@@ -275,7 +275,35 @@ export function createCruiseActions(set: NovelStateSet, get: NovelStateGet) {
           return;
         }
         if (run.checkpoint === "chapter_review") {
-          noteCruise(novelId, "正文审阅中：自动接受正在处理候选稿与正史建议。");
+          // 状态对账：批次已终态（事件丢失残留的 chapter_review）→ 收敛运行。
+          const batch = (await get().loadBatches()).find(
+            (item) => item.id === run.batchId,
+          );
+          if (
+            batch &&
+            ["completed", "failed", "cancelled"].includes(batch.status)
+          ) {
+            await get().syncWorkflowRunFromBatch(batch.id);
+            return;
+          }
+          // 进度可见：本周期已入正史 X/Y，而不是一句静态的“正在处理”。
+          const policy = run.config.generationPolicy;
+          const all =
+            get().chapters[novelId] ??
+            ((await get().loadChapters(novelId)),
+            get().chapters[novelId] ?? []);
+          const range = all.filter(
+            (item) =>
+              item.position >= policy.startChapter &&
+              item.position <= policy.endChapter,
+          );
+          const acceptedNow = range.filter(
+            (item) => item.status === "accepted",
+          ).length;
+          noteCruise(
+            novelId,
+            `正文审阅中：第 ${policy.startChapter}–${policy.endChapter} 章已入正史 ${acceptedNow}/${range.length}，自动接受正在处理候选稿与正史建议。`,
+          );
           return;
         }
         // 无检查点的暂停：批次被暂停（预算耗尽或手动）。
