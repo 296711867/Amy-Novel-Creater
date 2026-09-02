@@ -395,6 +395,20 @@ export function createCruiseActions(set: NovelStateSet, get: NovelStateGet) {
       if (acceptedCount < rangeChapters.length) {
         const auto = get().autoReview[novelId];
         if (!auto?.enabled) {
+          // 自动接受被全局门拦下时先试自愈：悬空状态属孤儿垃圾，清掉即可
+          // 恢复（线上形态：一条悬空状态让自动接受自停、巡航跟着停摆）。
+          if ((auto?.message ?? "").includes("全局一致性校验")) {
+            const removed = await get().cleanupDanglingStates(novelId);
+            const remaining = await get().collectGlobalErrors(novelId);
+            if (!remaining.length) {
+              get().setAutoReview(
+                novelId,
+                true,
+                `巡航自愈：已清理 ${removed} 条悬空正史状态，自动接受恢复。`,
+              );
+              return;
+            }
+          }
           pauseCruise(
             novelId,
             `自动接受已停止（${auto?.message ?? "原因未知"}），第 ${policy.startChapter}–${policy.endChapter} 章还有 ${rangeChapters.length - acceptedCount} 章未入正史。处理后续跑。`,
@@ -407,8 +421,21 @@ export function createCruiseActions(set: NovelStateSet, get: NovelStateGet) {
         );
         return;
       }
-      // AN-027 封存门禁：全局校验 error 阻断（含悬空引用等数据完整性问题）。
-      const globalErrors = await get().collectGlobalErrors(novelId);
+      // AN-027 封存门禁：全局校验 error 阻断。悬空状态引用属于孤儿垃圾数据
+      // （指向不存在的实体，无人能读到），巡航自动清理后复查（线上形态：
+      // 一条悬空状态卡住整条巡航的封存与自动接受）。
+      let globalErrors = await get().collectGlobalErrors(novelId);
+      if (globalErrors.length) {
+        const allDangling = globalErrors.every((message) =>
+          message.includes("不存在的人物实体"),
+        );
+        if (allDangling) {
+          const removed = await get().cleanupDanglingStates(novelId);
+          if (removed > 0)
+            noteCruise(novelId, `已自动清理 ${removed} 条悬空正史状态（孤儿记录）。`);
+          globalErrors = await get().collectGlobalErrors(novelId);
+        }
+      }
       if (globalErrors.length) {
         pauseCruise(
           novelId,

@@ -24,6 +24,20 @@ export function createGlobalReviewActions(set: NovelStateSet, get: NovelStateGet
       .filter((item) => item.severity === "error")
       .map((item) => item.message);
   },
+  /** AN-035：清理悬空正史状态（引用不存在实体的孤儿记录），返回清理条数。 */
+  async cleanupDanglingStates(novelId) {
+    if (!get().entities[novelId]) await get().loadEntities(novelId);
+    if (!get().characterStates[novelId]) await get().loadContinuity(novelId);
+    const entityIds = new Set(
+      (get().entities[novelId] ?? []).map((item: { id: string }) => item.id),
+    );
+    const dangling = (get().characterStates[novelId] ?? [])
+      .filter((item: { characterId: string }) => !entityIds.has(item.characterId))
+      .map((item: { id: string }) => item.id);
+    for (const id of dangling) await get().deleteCharacterState(novelId, id);
+    await get().loadContinuity(novelId);
+    return dangling.length;
+  },
   async loadGlobalFindings(novelId) {
     const findings = await platform.listGlobalFindings(novelId);
     set({ globalFindings: { ...get().globalFindings, [novelId]: findings } });

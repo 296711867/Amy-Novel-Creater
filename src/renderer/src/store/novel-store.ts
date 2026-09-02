@@ -343,6 +343,8 @@ export interface NovelState {
   tickAutoReview(novelId: string): Promise<void>;
   /** 内部：加载缺失的正史数据并返回 error 级全局发现的消息列表。 */
   collectGlobalErrors(novelId: string): Promise<string[]>;
+  /** AN-035：清理悬空正史状态（引用不存在实体的孤儿记录），返回清理条数。 */
+  cleanupDanglingStates(novelId: string): Promise<number>;
   /** AN-027 全局一致性：确定性校验（零 token）与 AI 语义审查。 */
   loadGlobalFindings(novelId: string): Promise<GlobalFinding[]>;
   /** AN-031：作者连读疑点标记（source=author，跨校验/审查轮保留）。 */

@@ -106,10 +106,10 @@ export function buildStoryOverview(
   const chapterById = new Map(chapters.map((item) => [item.id, item]));
   const positionOf = (chapterId: string | null): number =>
     (chapterId ? chapterById.get(chapterId)?.position : undefined) ?? 0;
-  const latestPosition = chapters.reduce(
-    (max, item) => Math.max(max, item.position),
-    0,
-  );
+  // 最新进度按已入正史章节计算（与全局校验同规则）。
+  const latestPosition = chapters
+    .filter((item) => item.status === "accepted")
+    .reduce((max, item) => Math.max(max, item.position), 0);
   const entityById = new Map(input.entities.map((item) => [item.id, item]));
 
   // 人物出场：状态快照 + 时间线参与合并。

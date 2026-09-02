@@ -258,10 +258,10 @@ export function checkGlobalConsistency(
 
   // 4. 伏笔超期：埋设后超过阈值章数仍未回收。
   const threshold = input.overdueThreshold ?? 30;
-  const latestPosition = input.chapters.reduce(
-    (max, item) => Math.max(max, item.position),
-    0,
-  );
+  // 伏笔年龄按已入正史章节计算：目录里尚未写作的章节不该计入“未回收”年龄。
+  const latestPosition = input.chapters
+    .filter((item) => item.status === "accepted")
+    .reduce((max, item) => Math.max(max, item.position), 0);
   for (const thread of input.foreshadow) {
     if (thread.status === "resolved" || thread.status === "abandoned") continue;
     const setupPosition = thread.setupChapterId
