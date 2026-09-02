@@ -179,6 +179,19 @@ export function createCruiseActions(set: NovelStateSet, get: NovelStateGet) {
         return;
       }
       if (run.status === "running") {
+        // 事件驱动的状态收敛可能丢失（批次完成事件未送达/监听未绑定）：
+        // 主动对账——批次已是终态就把运行状态收敛过去，否则巡航会永远
+        // 停在“推进中”而不封存（线上形态：卡在“确认记忆回写”按钮）。
+        const batch = (await get().loadBatches()).find(
+          (item) => item.id === run.batchId,
+        );
+        if (
+          batch &&
+          ["completed", "failed", "cancelled"].includes(batch.status)
+        ) {
+          await get().syncWorkflowRunFromBatch(batch.id);
+          return;
+        }
         noteCruise(
           novelId,
           `推进中：${WORKFLOW_PHASE_LABELS[run.currentPhase]}（目标第 ${cruise.targetChapter} 章）`,
@@ -368,13 +381,43 @@ export function createCruiseActions(set: NovelStateSet, get: NovelStateGet) {
         );
         return;
       }
+      // 下一周期若已有策划包（作者手动规划或上一轮遗留），复用而不重跑：
+      // 代确认后处理其待审提案（重复新增跳过），直接进入正文阶段。
+      const prepared = cycles.find(
+        (item) =>
+          next.startChapter >= item.startChapter &&
+          next.endChapter <= item.endChapter &&
+          ["plan_review", "ready"].includes(item.status),
+      );
+      if (prepared?.status === "plan_review")
+        await get().savePlanningCycle({ ...prepared, status: "ready" });
+      if (prepared) {
+        const pendingNext = (
+          get().planningProposals[novelId] ??
+          ((await get().loadPlanningProposals(novelId)),
+          get().planningProposals[novelId] ?? [])
+        ).filter((item) => item.status === "pending");
+        for (const item of pendingNext) {
+          try {
+            await get().reviewPlanningProposal(novelId, item.id, true);
+          } catch (error) {
+            if ((error instanceof Error ? error.message : "").includes("已存在"))
+              await get().reviewPlanningProposal(novelId, item.id, false);
+            else throw error;
+          }
+        }
+      }
       // 第 2 周期起地基（第 1–6 步）已存在：直接从结构规划开始，
       // 省去每周期三次圣经/人物/场景的重复模型调用。
       await get().startWorkflowRun(
         novelId,
         "autopilot",
         { ...cruisePolicy(policy, next) },
-        next.startChapter > 1 ? "structure" : undefined,
+        prepared
+          ? "generation"
+          : next.startChapter > 1
+            ? "structure"
+            : undefined,
       );
       noteCruise(
         novelId,
