@@ -195,17 +195,33 @@ export function createCruiseActions(set: NovelStateSet, get: NovelStateGet) {
       if (run.status === "paused") {
         if (run.checkpoint === "proposal_review") {
           // 巡航核心授权：设定提案由作者委托自动接受（与正文建议同一语义）。
+          // 撞上“新增设定已存在”（跨周期规划与正史记忆重复）时该提案的意图
+          // 已满足：自动拒绝跳过继续，不让整条巡航停摆；其他错误照常计失败。
           const proposals =
             get().planningProposals[novelId] ??
             ((await get().loadPlanningProposals(novelId)),
             get().planningProposals[novelId] ?? []);
           const pending = proposals.filter((item) => item.status === "pending");
-          for (const item of pending)
-            await get().reviewPlanningProposal(novelId, item.id, true);
+          let accepted = 0,
+            satisfied = 0;
+          for (const item of pending) {
+            try {
+              await get().reviewPlanningProposal(novelId, item.id, true);
+              accepted++;
+            } catch (error) {
+              const message = error instanceof Error ? error.message : "";
+              if (message.includes("已存在")) {
+                await get().reviewPlanningProposal(novelId, item.id, false);
+                satisfied++;
+              } else throw error;
+            }
+          }
           await get().resumeWorkflowRun(run.id);
           noteCruise(
             novelId,
-            `已自动接受 ${pending.length} 条设定提案，继续规划。`,
+            `已自动处理 ${pending.length} 条设定提案（接受 ${accepted}${
+              satisfied ? `、重复新增跳过 ${satisfied}` : ""
+            }），继续规划。`,
           );
           return;
         }

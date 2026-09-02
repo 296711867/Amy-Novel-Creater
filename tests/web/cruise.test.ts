@@ -109,6 +109,14 @@ vi.mock("@renderer/platform/web-platform", () => ({
     ) => {
       backend.calls.reviewPlanningProposal.push({ id, status });
       const item = backend.proposals.find((value) => value.id === id)!;
+      // 模拟 AN-005 门禁：新增提案撞上已有设定时接受被拒（线上事故形态）。
+      if (
+        status === "accepted" &&
+        (item as { action?: string }).action === "add-duplicate"
+      )
+        return Promise.reject(
+          new Error(`设定“${item.title ?? id}”已存在，请改用更新或合并提案`),
+        );
       item.status = status;
       return Promise.resolve({ ...item });
     },
@@ -329,6 +337,41 @@ describe("全自动巡航（AN-035）", () => {
       { id: "pp2", status: "accepted" },
     ]);
     expect(backend.calls.startBackgroundBatch).toEqual(["b-seed"]);
+  });
+
+  it("重复新增提案（设定已存在）→ 自动拒绝跳过，巡航不停摆", async () => {
+    seedRun({
+      status: "paused",
+      checkpoint: "proposal_review",
+      batchId: "b-seed",
+    });
+    seedCycle(21, 30, "generating");
+    backend.batches.push({
+      id: "b-seed",
+      novelId: "n1",
+      status: "paused",
+      policy: policy(21, 30),
+      outputTokensUsed: 100,
+      awaitingReview: true,
+      createdAt: backend.now,
+      updatedAt: backend.now,
+    });
+    backend.proposals.push(
+      { id: "dup1", novelId: "n1", action: "add-duplicate", status: "pending", cycleId: "entity-merge", startChapter: 21, endChapter: 30, title: "还魂灯（青灯）模块图纸" },
+      { id: "pp9", novelId: "n1", action: "update", status: "pending", cycleId: "entity-merge", startChapter: 21, endChapter: 30 },
+    );
+    store.setState({ cruise: { n1: { enabled: true, status: "active", targetChapter: 40, message: "", updatedAt: backend.now } } });
+    await store.getState().tickCruise("n1");
+    // 重复新增：先试接受被门禁拒绝 → 自动拒绝；正常提案照常接受；巡航继续。
+    expect(backend.calls.reviewPlanningProposal).toEqual([
+      { id: "dup1", status: "accepted" },
+      { id: "dup1", status: "rejected" },
+      { id: "pp9", status: "accepted" },
+    ]);
+    expect(backend.calls.startBackgroundBatch).toEqual(["b-seed"]);
+    const cruise = store.getState().cruise["n1"];
+    expect(cruise?.status).toBe("active");
+    expect(cruise?.message).toContain("重复新增跳过 1");
   });
 
   it("运行失败 → 巡航暂停并记录原因（不自动重试）", async () => {
