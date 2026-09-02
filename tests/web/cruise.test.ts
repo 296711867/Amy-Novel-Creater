@@ -148,6 +148,24 @@ vi.mock("@renderer/platform/web-platform", () => ({
       Promise.resolve(backend.chapters.map((item) => ({ ...item }))),
     listStoryEntities: () => Promise.resolve(backend.entities as never[]),
     listTimelineEvents: () => Promise.resolve(backend.timeline as never[]),
+    deleteTimelineEvent: (id: string) => {
+      backend.timeline = backend.timeline.filter(
+        (item) => (item as { id: string }).id !== id,
+      );
+      return Promise.resolve();
+    },
+    deleteCharacterState: (id: string) => {
+      backend.states = backend.states.filter(
+        (item) => (item as { id: string }).id !== id,
+      );
+      return Promise.resolve();
+    },
+    deleteForeshadowThread: (id: string) => {
+      backend.foreshadow = backend.foreshadow.filter(
+        (item) => (item as { id: string }).id !== id,
+      );
+      return Promise.resolve();
+    },
     listCharacterStates: () => Promise.resolve(backend.states as never[]),
     listForeshadowThreads: () =>
       Promise.resolve(backend.foreshadow as never[]),
@@ -484,6 +502,49 @@ describe("全自动巡航（AN-035）", () => {
     expect(store.getState().autoReview["n1"]?.enabled).toBe(false);
     expect(store.getState().autoReview["n1"]?.message).toContain("巡航完成");
     expect(window.localStorage.getItem("amy-novel:cruise")).toBe("{}");
+  });
+
+  it("封存时自动记忆清理：重复状态/伏笔/时间线各留一条（每 10 章例行）", async () => {
+    seedRun({});
+    seedChapters(21, 30, "accepted");
+    seedCycle(21, 30, "generating");
+    backend.entities.push({
+      id: "e1", novelId: "n1", type: "character", name: "沈灯",
+      summary: "", aliases: [], profile: {}, status: "active",
+      createdAt: backend.now, updatedAt: backend.now,
+    });
+    const mkState = (id: string) => ({
+      id, novelId: "n1", characterId: "e1", chapterId: "c21",
+      summary: "同一条状态的重复记录", location: "", appearance: "", outfit: "",
+      identity: "", physical: "", emotional: "", knowledge: [], goals: [],
+      inventory: [], skills: [], source: "manual",
+      createdAt: backend.now, updatedAt: backend.now,
+    });
+    backend.states.push(mkState("s1"), mkState("s2"));
+    const mkThread = (id: string) => ({
+      id, novelId: "n1", title: "同一个伏笔的重复记录", detail: "d",
+      setupChapterId: "c21", payoffChapterId: null, status: "planted",
+      source: "manual", createdAt: backend.now, updatedAt: backend.now,
+    });
+    backend.foreshadow.push(mkThread("f1"), mkThread("f2"));
+    const mkEvent = (id: string) => ({
+      id, novelId: "n1", chapterId: "c21", storyTime: "t", title: "同一事件的重复记录",
+      detail: "d", participantIds: [], source: "manual",
+      createdAt: backend.now, updatedAt: backend.now,
+    });
+    backend.timeline.push(mkEvent("t1"), mkEvent("t2"));
+    store.setState({ cruise: { n1: { enabled: true, status: "active", targetChapter: 40, message: "", updatedAt: backend.now } } });
+    await store.getState().tickCruise("n1");
+    expect(
+      backend.states.map((item) => (item as { id: string }).id),
+    ).toEqual(["s1"]);
+    expect(
+      backend.foreshadow.map((item) => (item as { id: string }).id),
+    ).toEqual(["f1"]);
+    expect(
+      backend.timeline.map((item) => (item as { id: string }).id),
+    ).toEqual(["t1"]);
+    expect(store.getState().cruise["n1"]?.status).toBe("active");
   });
 
   it("周期已被人工封存 → 跳过封存直接进入下一周期（不报「未找到策划包」）", async () => {

@@ -345,6 +345,10 @@ export interface NovelState {
   collectGlobalErrors(novelId: string): Promise<string[]>;
   /** AN-035：清理悬空正史状态（引用不存在实体的孤儿记录），返回清理条数。 */
   cleanupDanglingStates(novelId: string): Promise<number>;
+  /** AN-035：周期封存时的自动记忆清理（悬空/重复状态、重复伏笔与时间线）。 */
+  autoCleanupMemory(
+    novelId: string,
+  ): Promise<{ states: number; foreshadow: number; timeline: number }>;
   /** AN-027 全局一致性：确定性校验（零 token）与 AI 语义审查。 */
   loadGlobalFindings(novelId: string): Promise<GlobalFinding[]>;
   /** AN-031：作者连读疑点标记（source=author，跨校验/审查轮保留）。 */

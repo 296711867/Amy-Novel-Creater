@@ -416,6 +416,20 @@ export function createCruiseActions(set: NovelStateSet, get: NovelStateGet) {
         );
         return;
       }
+      // AN-035 周期封存例行动作：自动记忆清理（每 10 章一次）——只清确定性
+      // 垃圾：悬空状态、同章重复状态、同名同埋设章的重复伏笔、重复时间线；
+      // 语义层面的伪伏笔废弃仍归作者（故事总览手动批量处理）。
+      try {
+        const cleaned = await get().autoCleanupMemory(novelId);
+        const total = cleaned.states + cleaned.foreshadow + cleaned.timeline;
+        if (total > 0)
+          noteCruise(
+            novelId,
+            `记忆体检：清理 ${total} 条冗余记录（状态 ${cleaned.states}、伏笔 ${cleaned.foreshadow}、时间线 ${cleaned.timeline}）。`,
+          );
+      } catch {
+        // 清理失败不阻断封存（门禁仍会拦截 error 级数据问题）。
+      }
       // AN-027 封存门禁：全局校验 error 阻断。悬空状态引用属于孤儿垃圾数据
       // （指向不存在的实体，无人能读到），巡航自动清理后复查（线上形态：
       // 一条悬空状态卡住整条巡航的封存与自动接受）。

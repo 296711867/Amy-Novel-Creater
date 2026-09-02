@@ -38,6 +38,63 @@ export function createGlobalReviewActions(set: NovelStateSet, get: NovelStateGet
     await get().loadContinuity(novelId);
     return dangling.length;
   },
+  /**
+   * AN-035 周期封存时的自动记忆清理：只清确定性垃圾，不做语义判断——
+   * ① 悬空状态（引用不存在实体）；② 同人物同章内容完全相同的重复状态；
+   * ③ 同名且同埋设章的重复伏笔（保留一条）；④ 同章同名同文的重复时间线。
+   * 伪伏笔废弃等语义决策仍归作者（故事总览手动批量处理）。
+   */
+  async autoCleanupMemory(novelId) {
+    if (!get().entities[novelId]) await get().loadEntities(novelId);
+    if (!get().characterStates[novelId] || !get().foreshadowThreads[novelId] ||
+        !get().timelineEvents[novelId])
+      await get().loadContinuity(novelId);
+    const entityIds = new Set(
+      (get().entities[novelId] ?? []).map((item: { id: string }) => item.id),
+    );
+    const states = get().characterStates[novelId] ?? [];
+    // 悬空 + 重复状态：同 characterId+chapterId+summary 只留最早一条。
+    const seenState = new Set<string>();
+    let stateCount = 0;
+    for (const state of [...states].sort((a: { createdAt: string }, b: { createdAt: string }) =>
+      a.createdAt < b.createdAt ? -1 : 1,
+    )) {
+      const dangling = !entityIds.has(state.characterId);
+      const key = `${state.characterId}:${state.chapterId ?? ""}:${state.summary}`;
+      if (dangling || seenState.has(key)) {
+        await get().deleteCharacterState(novelId, state.id);
+        stateCount++;
+      } else seenState.add(key);
+    }
+    // 重复伏笔：同标题 + 同埋设章（含都为空）只留最早一条。
+    const seenThread = new Set<string>();
+    let threadCount = 0;
+    for (const thread of [...(get().foreshadowThreads[novelId] ?? [])].sort(
+      (a: { createdAt: string }, b: { createdAt: string }) =>
+        a.createdAt < b.createdAt ? -1 : 1,
+    )) {
+      const key = `${thread.title.trim()}:${thread.setupChapterId ?? ""}`;
+      if (seenThread.has(key)) {
+        await get().deleteForeshadow(novelId, thread.id);
+        threadCount++;
+      } else seenThread.add(key);
+    }
+    // 重复时间线：同章 + 同标题 + 同详情只留最早一条。
+    const seenEvent = new Set<string>();
+    let eventCount = 0;
+    for (const event of [...(get().timelineEvents[novelId] ?? [])].sort(
+      (a: { createdAt: string }, b: { createdAt: string }) =>
+        a.createdAt < b.createdAt ? -1 : 1,
+    )) {
+      const key = `${event.chapterId ?? ""}:${event.title}:${event.detail}`;
+      if (seenEvent.has(key)) {
+        await get().deleteTimeline(novelId, event.id);
+        eventCount++;
+      } else seenEvent.add(key);
+    }
+    await get().loadContinuity(novelId);
+    return { states: stateCount, foreshadow: threadCount, timeline: eventCount };
+  },
   async loadGlobalFindings(novelId) {
     const findings = await platform.listGlobalFindings(novelId);
     set({ globalFindings: { ...get().globalFindings, [novelId]: findings } });
