@@ -185,7 +185,36 @@ export function createCruiseActions(set: NovelStateSet, get: NovelStateGet) {
         );
         return;
       }
+      // 代作者确认策划包：检查点模式的运行停在 plan_review（策划包待审核），
+      // 不确认就直接建批次会被“范围未通过一致性检查”门禁拒绝（线上形态）。
+      const confirmCycleForRun = async () => {
+        const policy = run.config.generationPolicy;
+        const cycles =
+          get().planningCycles[novelId] ??
+          ((await get().loadPlanningCycles(novelId)),
+          get().planningCycles[novelId] ?? []);
+        const review = cycles.find(
+          (item) =>
+            policy.startChapter >= item.startChapter &&
+            policy.endChapter <= item.endChapter &&
+            item.status === "plan_review",
+        );
+        if (review) {
+          await get().savePlanningCycle({ ...review, status: "ready" });
+          return true;
+        }
+        return false;
+      };
       if (run.status === "failed") {
+        if (run.error.includes("策划包")) {
+          // 已知形态自愈：代确认待审策划包后续跑，不停巡航。
+          const confirmed = await confirmCycleForRun();
+          if (confirmed) {
+            await get().resumeWorkflowRun(run.id);
+            noteCruise(novelId, "已代为确认待审策划包，继续推进。");
+            return;
+          }
+        }
         pauseCruise(
           novelId,
           `运行失败已暂停：${run.error || "未知错误"}。排查后点「继续巡航」从中断处续跑。`,
@@ -226,7 +255,9 @@ export function createCruiseActions(set: NovelStateSet, get: NovelStateGet) {
           return;
         }
         if (run.checkpoint === "phase_review") {
-          // 非巡航创建的检查点运行：直接代点「继续运行」。
+          // 非巡航创建的检查点运行：代点「继续运行」；结构阶段之后的暂停
+          // 意味着策划包在 plan_review，先代确认再续，避免建批次被门禁拒绝。
+          if (run.mode === "checkpoint") await confirmCycleForRun();
           await get().resumeWorkflowRun(run.id);
           return;
         }

@@ -443,6 +443,27 @@ describe("全自动巡航（AN-035）", () => {
     expect(store.getState().cruise["n1"]?.message).toContain("已封存");
   });
 
+  it("检查点运行的策划包待审 → 代确认后续跑（策划包门禁自愈）", async () => {
+    seedRun({
+      mode: "checkpoint",
+      status: "failed",
+      checkpoint: null,
+      batchId: null,
+      error: "第 31–40 章不在已通过一致性检查的策划包范围内",
+      config: { generationPolicy: policy(31, 40), maxPhaseRetries: 2 },
+    });
+    seedCycle(31, 40, "plan_review");
+    store.setState({ cruise: { n1: { enabled: true, status: "active", targetChapter: 40, message: "", updatedAt: backend.now } } });
+    await store.getState().tickCruise("n1");
+    const confirmed = backend.calls.savePlanningCycle.find(
+      (item) => (item as { status: string }).status === "ready",
+    );
+    expect(confirmed).toMatchObject({ startChapter: 31, endChapter: 40 });
+    // 确认后续跑：运行回到推进路径（开始新批次创建）。
+    expect(backend.calls.createGenerationDraft.length + backend.calls.startBackgroundBatch.length).toBeGreaterThan(0);
+    expect(store.getState().cruise["n1"]?.status).toBe("active");
+  });
+
   it("到达目标章数 → 巡航收工并关闭自动接受", async () => {
     seedRun({ config: { generationPolicy: policy(31, 40), maxPhaseRetries: 2 } });
     seedChapters(31, 40, "accepted");
