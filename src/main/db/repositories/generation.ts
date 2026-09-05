@@ -343,13 +343,19 @@ export function createGenerationRepository(
   async function setBatchStatus(
     id: string,
     status: GenerationBatch["status"],
-    patch: { awaitingReview?: boolean } = {},
+    patch: { awaitingReview?: boolean; outputTokenBudget?: number } = {},
   ): Promise<GenerationBatch> {
+    const current = await getGenerationBatch(id);
+    if (!current) throw new Error("Batch not found");
+    const policy = patch.outputTokenBudget
+      ? { ...current.policy, outputTokenBudget: patch.outputTokenBudget }
+      : current.policy;
     await client.execute({
-      sql: "UPDATE generation_batches SET status=?,awaiting_review=?,updated_at=? WHERE id=?",
+      sql: "UPDATE generation_batches SET status=?,awaiting_review=?,policy_json=?,updated_at=? WHERE id=?",
       args: [
         status,
         patch.awaitingReview ? 1 : 0,
+        JSON.stringify(policy),
         new Date().toISOString(),
         id,
       ],

@@ -23,6 +23,7 @@ import type {
 } from "@domain/model-profile";
 import type {
   ChapterCandidate,
+  AnalyzeChapterCandidateInput,
   ContinueChapterInput,
   ContinueChapterResult,
   GenerateChapterInput,
@@ -248,10 +249,14 @@ export interface PlatformPort {
   onGenerationEvent?(
     listener: (event: GenerationEvent) => void,
   ): () => void;
+  /** Web 批次的本地质量、AI 语义审查与事实提取；Electron 由主进程批次执行器负责。 */
+  analyzeChapterCandidate?(
+    input: AnalyzeChapterCandidateInput,
+  ): Promise<StoredFinding[]>;
   setBatchStatus(
     batchId: string,
     status: GenerationBatch["status"],
-    patch?: { awaitingReview?: boolean },
+    patch?: { awaitingReview?: boolean; outputTokenBudget?: number },
   ): Promise<GenerationBatch>;
   /**
    * AN-029：删除批次记录（任务队列与活动日志一并删除，已入正史的章节、

@@ -225,6 +225,7 @@ const backend = vi.hoisted(() => {
     /** 人物状态（listCharacterStates 数据源）；全局校验用。 */
     states: [] as Array<Record<string, unknown>>,
     failAccept: false,
+    failGlobalCheck: false,
   };
 });
 
@@ -326,7 +327,9 @@ vi.mock("@renderer/platform/web-platform", () => ({
       return Promise.resolve(input);
     },
     listStoryEntities: () =>
-      Promise.resolve([
+      backend.failGlobalCheck
+        ? Promise.reject(new Error("数据库暂时不可用"))
+        : Promise.resolve([
         {
           id: "e1",
           novelId: "n1",
@@ -407,6 +410,7 @@ describe("自动审阅（AN-026）", () => {
     backend.calls.appendGenerationEvent.length = 0;
     backend.findings.length = 0;
     backend.failAccept = false;
+    backend.failGlobalCheck = false;
     window.localStorage.removeItem("amy-novel:auto-review");
     store.setState({
       chapters: {},
@@ -562,6 +566,15 @@ describe("自动审阅（AN-026）", () => {
     expect(state?.enabled).toBe(false);
     expect(state?.message).toContain("全局一致性校验");
     backend.states.length = 0;
+  });
+
+  it("全局校验自身失败时 fail-closed，不把未知状态当作通过", async () => {
+    backend.failGlobalCheck = true;
+    enableAuto();
+    await store.getState().tickAutoReview("n1");
+    expect(backend.calls.acceptAttempts).toHaveLength(0);
+    expect(store.getState().autoReview["n1"]).toMatchObject({ enabled: false });
+    expect(store.getState().autoReview["n1"]?.message).toContain("全局一致性校验失败");
   });
 
   it("setAutoReview 开关：状态与提示文案同步", () => {

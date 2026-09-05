@@ -310,7 +310,7 @@ export interface NovelState {
   setBatchStatus(
     batchId: string,
     status: GenerationBatch["status"],
-    patch?: { awaitingReview?: boolean },
+    patch?: { awaitingReview?: boolean; outputTokenBudget?: number },
   ): Promise<void>;
   /** AN-029：删除已完结批次的记录（平台层保证仅 completed/cancelled 可删）。 */
   deleteBatch(batchId: string): Promise<void>;
@@ -345,7 +345,7 @@ export interface NovelState {
    */
   startCruise(novelId: string, targetChapter: number): void;
   stopCruise(novelId: string, message?: string): void;
-  resumeCruise(novelId: string): void;
+  resumeCruise(novelId: string): Promise<void>;
   tickCruise(novelId: string): Promise<void>;
   tickAutoReview(novelId: string): Promise<void>;
   /** 内部：加载缺失的正史数据并返回 error 级全局发现的消息列表。 */
@@ -1312,6 +1312,8 @@ export const useNovelStore = create<NovelState>((set, get) => ({
       await platform.pauseBackgroundBatch(id);
       if (status === "cancelled")
         await platform.setBatchStatus(id, "cancelled");
+      else if (patch)
+        await platform.setBatchStatus(id, "paused", patch);
     } else {
       if (status === "paused" || status === "cancelled") {
         const current = (get().jobs[id] ?? []).find(
@@ -1822,20 +1824,46 @@ export const useNovelStore = create<NovelState>((set, get) => ({
             });
           }
         }
-        // AN-023 审查驱动重写（Web 端）：error 级质量发现自动注入修订要求
-        // 重写（默认关闭，上限 autoRewriteRounds 轮）。发现不落库（端口无
-        // saveFindings），仅作为重写触发与事件留痕；旧候选稿保留可回看。
+        // Web 端与 Electron 同一质量链：确定性检查 + AI 语义审查 +
+        // 正史事实提取；无人值守时任一模型步骤失败即走批次重试，不得放行。
+        const qualityFindings = platform.analyzeChapterCandidate
+          ? await platform.analyzeChapterCandidate({
+              novelId: batch.novelId,
+              chapterId: job.chapterId,
+              candidateId: candidate.id,
+              profileId: profile.id,
+              content: candidate.content,
+              chapterReview: batch.policy.approvalMode === "chapter_review",
+              continuityCheck: batch.policy.continuityCheck,
+              failClosed: !gate,
+              minimumWordRatio: gate ? 0.6 : 0.9,
+            })
+          : chapter
+            ? checkCandidateQuality({
+                chapter,
+                content: candidate.content,
+                scenes: (get().scenes[batch.novelId] ?? []).filter(
+                  (item) => item.chapterId === chapter.id,
+                ),
+                entities: get().entities[batch.novelId] ?? [],
+                foreshadow: get().foreshadowThreads[batch.novelId] ?? [],
+                minimumWordRatio: gate ? 0.6 : 0.9,
+              })
+            : [];
+        await emit({
+          batchId,
+          novelId: batch.novelId,
+          chapterId: job.chapterId,
+          stage: "quality_check",
+          level: qualityFindings.length ? "warning" : "success",
+          message: qualityFindings.length
+            ? `质量与语义审查发现 ${qualityFindings.length} 项问题`
+            : "质量与语义审查通过",
+          data: { findings: qualityFindings.map((item) => item.message) },
+        });
+        // AN-023 审查驱动重写：所有 error（含 AI 语义审查）共同触发重写。
         const rewriteRounds = batch.policy.autoRewriteRounds ?? 0;
         if (chapter && rewriteRounds > 0) {
-          const qualityFindings = checkCandidateQuality({
-            chapter,
-            content: candidate.content,
-            scenes: (get().scenes[batch.novelId] ?? []).filter(
-              (item) => item.chapterId === chapter.id,
-            ),
-            entities: get().entities[batch.novelId] ?? [],
-            foreshadow: get().foreshadowThreads[batch.novelId] ?? [],
-          });
           if (shouldAutoRewrite(qualityFindings, rewriteRounds, job.attempt)) {
             const errors = qualityFindings.filter(
               (item) => item.severity === "error",

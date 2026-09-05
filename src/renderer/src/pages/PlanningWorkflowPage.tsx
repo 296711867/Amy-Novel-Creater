@@ -525,7 +525,7 @@ export function PlanningWorkflowPage(): React.JSX.Element {
           chapterWords: novel.chapterWords,
           continuityCheck: true,
           maxRetries: 2,
-          approvalMode: "candidate",
+          approvalMode: "chapter_review",
           // AN-023：无人值守模式下 error 自动重写最多 2 轮（不写正史，
           // 重写后仍有 error 会被自动接受的质量门拦下转人工）。
           autoRewriteRounds: 2,

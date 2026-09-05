@@ -7,8 +7,9 @@ import {
 } from "@domain/project-export";
 import { useNovelStore } from "../store/novel-store";
 import { platform } from "../platform/web-platform";
+import { buildTextArchiveEntries, encodeTextZip } from "@domain/text-archive";
 
-function download(name: string, content: string, type: string) {
+function download(name: string, content: BlobPart, type: string) {
   const url = URL.createObjectURL(new Blob([content], { type })),
     link = document.createElement("a");
   link.href = url;
@@ -50,6 +51,22 @@ export function DataPage(): React.JSX.Element {
         "application/json;charset=utf-8",
       );
       setMessage("完整项目数据包已导出，不包含 API Key");
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function textArchive() {
+    if (!novel) return;
+    setBusy(true);
+    try {
+      const bundle = await store.buildProjectBundle(novel.id);
+      const bytes = encodeTextZip(buildTextArchiveEntries(bundle));
+      download(
+        `${safeExportName(novel.title)}-分章文本.zip`,
+        Uint8Array.from(bytes).buffer,
+        "application/zip",
+      );
+      setMessage("已导出分章文本 ZIP（作品信息、设定与已入正史章节）");
     } finally {
       setBusy(false);
     }
@@ -134,6 +151,11 @@ export function DataPage(): React.JSX.Element {
             <Archive size={18} />
             <b>{busy ? "正在整理…" : "备份项目数据包"}</b>
             <span>章节、版本、圣经、正史、候选稿与用量</span>
+          </button>
+          <button disabled={!novel || busy} onClick={textArchive}>
+            <Archive size={18} />
+            <b>{busy ? "正在整理…" : "导出分章文本 ZIP"}</b>
+            <span>作品信息、设定与每章独立 TXT</span>
           </button>
         </div>
         {message && <div className="model-result">{message}</div>}

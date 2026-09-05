@@ -439,6 +439,10 @@ describe("NovelDatabase", () => {
     expect(
       (await database.getGenerationBatch(batchResult.id))?.outputTokensUsed,
     ).toBe(1200);
+    const toppedUp = await database.setBatchStatus(batchResult.id, "paused", {
+      outputTokenBudget: 70_000,
+    });
+    expect(toppedUp.policy.outputTokenBudget).toBe(70_000);
     // AN-029 批次记录删除：进行中/待审拒绝；取消后级联清理任务与活动日志。
     await expect(
       database.deleteGenerationBatch(batchResult.id),

@@ -43,13 +43,20 @@ import {
   type PersonaSuggestion,
 } from "@domain/persona-recommendation";
 import type {
+  AnalyzeChapterCandidateInput,
   ChapterCandidate,
   ContinueChapterInput,
   ContinueChapterResult,
   GenerateChapterInput,
   GenerationProgress,
 } from "@domain/chapter-generation";
-import type { FactProposal, StoredFinding } from "@domain/quality-check";
+import {
+  checkCandidateQuality,
+  type FactProposal,
+  type StoredFinding,
+} from "@domain/quality-check";
+import { chapterReviewPrompt, parseChapterReview } from "@domain/chapter-review";
+import { factExtractionPrompt, parseFactExtraction } from "@domain/fact-extraction";
 import { estimateTokens } from "@domain/context-pack";
 import {
   GLOBAL_REVIEW_CYCLE_ID,
@@ -1699,6 +1706,108 @@ export const webPlatform: PlatformPort = {
     });
     return candidate;
   },
+  async analyzeChapterCandidate(input: AnalyzeChapterCandidateInput) {
+    const profile = read<ModelProfile[]>(PROFILES_KEY, []).find(
+      (item) => item.id === input.profileId,
+    );
+    if (!profile) throw new Error("Model profile not found");
+    const chapter = read<Chapter[]>(chaptersKey(input.novelId), []).find(
+      (item) => item.id === input.chapterId,
+    );
+    if (!chapter) throw new Error("Chapter not found");
+    const key = sessionStorage.getItem(`amy-novel:secret:${profile.id}`) ?? "";
+    const findings = checkCandidateQuality({
+      chapter,
+      content: input.content,
+      scenes: read<StoryScene[]>(scenesKey(input.novelId), []).filter(
+        (item) => item.chapterId === input.chapterId,
+      ),
+      entities: read<StoryEntity[]>(entitiesKey(input.novelId), []),
+      foreshadow: read<ForeshadowThread[]>(foreshadowKey(input.novelId), []),
+      minimumWordRatio: input.minimumWordRatio,
+    });
+    if (input.chapterReview) {
+      try {
+        const result = await requestWebPlanning(
+          profile,
+          key,
+          chapterReviewPrompt(chapter.outline || "暂未填写", input.content),
+          1200,
+          0.1,
+        );
+        findings.push(...parseChapterReview(result.content));
+        await this.saveUsage({
+          novelId: input.novelId,
+          chapterId: input.chapterId,
+          operation: "chapter_review",
+          provider: profile.provider,
+          model: profile.modelId,
+          inputTokens: result.inputTokens,
+          outputTokens: result.outputTokens,
+          cachedTokens: result.cachedTokens,
+          cost: null,
+          measurement: result.measured ? "provider" : "estimated",
+        });
+      } catch (error) {
+        if (input.failClosed)
+          throw new Error(
+            `AI 章节审查失败：${error instanceof Error ? error.message : "结果无法解析"}`,
+          );
+      }
+    }
+    const now = new Date().toISOString();
+    const stored = findings.map<StoredFinding>((item) => ({
+      ...item,
+      id: nanoid(),
+      candidateId: input.candidateId,
+      chapterId: input.chapterId,
+      status: "open",
+      createdAt: now,
+      updatedAt: now,
+    }));
+    write(findingsKey(input.candidateId), stored);
+    if (input.continuityCheck) {
+      try {
+        const result = await requestWebPlanning(
+          profile,
+          key,
+          factExtractionPrompt(input.content),
+          1800,
+          0.1,
+        );
+        const proposals = parseFactExtraction(result.content).map<FactProposal>(
+          (item) => ({
+            ...item,
+            id: nanoid(),
+            candidateId: input.candidateId,
+            chapterId: input.chapterId,
+            status: "proposed",
+            createdAt: now,
+            updatedAt: now,
+          }),
+        );
+        write(proposalsKey(input.candidateId), proposals);
+        await this.saveUsage({
+          novelId: input.novelId,
+          chapterId: input.chapterId,
+          operation: "continuity_check",
+          provider: profile.provider,
+          model: profile.modelId,
+          inputTokens: result.inputTokens,
+          outputTokens: result.outputTokens,
+          cachedTokens: result.cachedTokens,
+          cost: null,
+          measurement: result.measured ? "provider" : "estimated",
+        });
+      } catch (error) {
+        if (input.failClosed)
+          throw new Error(
+            `正史事实提取失败：${error instanceof Error ? error.message : "结果无法解析"}`,
+          );
+      }
+    }
+    return stored;
+  },
   async listChapterCandidates(chapterId: string) {
     return read<ChapterCandidate[]>(candidatesKey(chapterId), []);
   },
@@ -2386,7 +2495,7 @@ export const webPlatform: PlatformPort = {
   async setBatchStatus(
     id: string,
     status: GenerationBatch["status"],
-    patch?: { awaitingReview?: boolean },
+    patch?: { awaitingReview?: boolean; outputTokenBudget?: number },
   ) {
     const list = read<GenerationBatch[]>(BATCHES_KEY, []),
       index = list.findIndex((item) => item.id === id);
@@ -2395,6 +2504,9 @@ export const webPlatform: PlatformPort = {
       ...list[index],
       status,
       awaitingReview: patch?.awaitingReview ?? false,
+      policy: patch?.outputTokenBudget
+        ? { ...list[index].policy, outputTokenBudget: patch.outputTokenBudget }
+        : list[index].policy,
       updatedAt: new Date().toISOString(),
     };
     write(BATCHES_KEY, list);

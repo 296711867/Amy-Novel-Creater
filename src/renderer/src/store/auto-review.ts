@@ -8,9 +8,8 @@ const autoReviewFailures = new Map<string, number>();
 
 const AUTO_REVIEW_INTERVAL_MS = 2000;
 const AUTO_REVIEW_MAX_FAILURES = 3;
-/** 单轮自动审阅看门狗时限：全部为快速 DB 操作，60 秒足矣。 */
+/** 单轮自动审阅看门狗时限：超时只提示，不并发启动第二轮。 */
 const AUTO_REVIEW_TICK_TIMEOUT_MS = 60_000;
-const autoReviewTickGen = new Map<string, number>();
 /** 任务状态超过该时长无更新视为运行器丢失（应用重启等），自动重新接管。 */
 const AUTO_REVIEW_STALE_MS = 5 * 60_000;
 const AUTO_REVIEW_STORAGE_KEY = "amy-novel:auto-review";
@@ -85,19 +84,11 @@ export function createAutoReviewActions(set: NovelStateSet, get: NovelStateGet) 
     if (!get().autoReview[novelId]?.enabled || autoReviewTicking.has(novelId))
       return;
     autoReviewTicking.add(novelId);
-    // 看门狗（与巡航同款）：自动审阅全部是快速 DB 操作，任一步挂起超过
-    // 60 秒即强制解锁并明示，防止防重入锁被永久占死后“已开启却不动”
-    // （线上形态：候选稿就绪 9/10，自动审阅静默停摆）。
-    const generation = (autoReviewTickGen.get(novelId) ?? 0) + 1;
-    autoReviewTickGen.set(novelId, generation);
+    // 底层请求自带超时；这里只报告慢任务。强制解锁会让下一轮与旧轮并发，
+    // 造成同一候选稿被重复接受或重复写入正史。
     const watchdog = window.setTimeout(() => {
-      if (
-        autoReviewTicking.has(novelId) &&
-        autoReviewTickGen.get(novelId) === generation
-      ) {
-        autoReviewTicking.delete(novelId);
-        noteAutoReview(novelId, "上一轮自动审阅超时，已解锁，下一轮自动重试。");
-      }
+      if (autoReviewTicking.has(novelId))
+        noteAutoReview(novelId, "本轮自动审阅耗时较长，仍在等待，未启动重复任务。");
     }, AUTO_REVIEW_TICK_TIMEOUT_MS);
     try {
       const batches = await get().loadBatches();
@@ -183,9 +174,17 @@ export function createAutoReviewActions(set: NovelStateSet, get: NovelStateGet) 
           (item) => item.severity === "error" && item.status === "open",
         );
         // AN-027 全局门：确定性校验发现 error（引用悬空等数据完整性问题）同样阻断。
-        const globalBlocking = await get()
-          .collectGlobalErrors(novelId)
-          .catch(() => [] as string[]);
+        let globalBlocking: string[];
+        try {
+          globalBlocking = await get().collectGlobalErrors(novelId);
+        } catch (error) {
+          get().setAutoReview(
+            novelId,
+            false,
+            `全局一致性校验失败（${error instanceof Error ? error.message : "未知错误"}），自动接受已暂停。`,
+          );
+          return;
+        }
         if (blocking.length || globalBlocking.length) {
           get().setAutoReview(
             novelId,
@@ -313,8 +312,7 @@ export function createAutoReviewActions(set: NovelStateSet, get: NovelStateGet) 
       }
     } finally {
       window.clearTimeout(watchdog);
-      if (autoReviewTickGen.get(novelId) === generation)
-        autoReviewTicking.delete(novelId);
+      autoReviewTicking.delete(novelId);
     }
   },
   };

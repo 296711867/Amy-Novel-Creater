@@ -30,6 +30,17 @@ export interface GenerateChapterInput {
   temperature: number;
   styleTemplateId?: string;
 }
+export interface AnalyzeChapterCandidateInput {
+  novelId: string;
+  chapterId: string;
+  candidateId: string;
+  profileId: string;
+  content: string;
+  chapterReview: boolean;
+  continuityCheck: boolean;
+  failClosed: boolean;
+  minimumWordRatio: number;
+}
 export interface GenerationProgress {
   requestId: string;
   type: "started" | "delta" | "usage";

@@ -89,6 +89,17 @@ describe("candidate quality check", () => {
       }).some((item) => item.category === "foreshadow"),
     ).toBe(true);
   });
+  it("无人值守可把字数安全门提高到目标的 90%", () => {
+    const findings = checkCandidateQuality({
+      chapter,
+      content: "字".repeat(85),
+      scenes: [],
+      entities: [],
+      foreshadow: [],
+      minimumWordRatio: 0.9,
+    });
+    expect(findings.find((item) => item.id === "length:short")?.message).toContain("90%");
+  });
 });
 
 describe("AN-023 审查驱动重写", () => {

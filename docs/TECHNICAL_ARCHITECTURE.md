@@ -132,8 +132,8 @@ Context Builder 接收章节、预算和检索策略，输出带来源的不可�
 - Renderer：关键向导、接受/拒绝和保存状态。
 - 契约测试：Electron IPC 与 Web API 必须返回同一 DTO。
 
-Domain、Application、数据库与模型适配已有自动化覆盖；Renderer 关键流程和双端契约仍是
-待办，不得把本节目标误写成已完成，状态见 `BACKLOG.md` AN-010、AN-011。
+Domain、Application、数据库与模型适配已有自动化覆盖；Renderer 关键流程和双端契约
+也已完成，当前证据与后续状态统一见 `BACKLOG.md` AN-010、AN-011。
 
 ## 8. 滚动规划与版本化记忆
 

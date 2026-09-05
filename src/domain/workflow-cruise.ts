@@ -61,7 +61,9 @@ export function draftClosingState(input: {
       state.characterId,
       (countByCharacter.get(state.characterId) ?? 0) + 1,
     );
-    latestByCharacter.set(state.characterId, state);
+    const current = latestByCharacter.get(state.characterId);
+    if (!current || state.updatedAt > current.updatedAt)
+      latestByCharacter.set(state.characterId, state);
   }
   const headline = [...countByCharacter.entries()]
     .sort((a, b) => b[1] - a[1])

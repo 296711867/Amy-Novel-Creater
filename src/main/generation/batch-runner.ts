@@ -259,7 +259,7 @@ export class BatchRunner {
       );
     } catch (error) {
       if (signal.aborted) throw error;
-      // 审查与事实提取是增强步骤，失败不阻断候选稿产出。
+      // 保留候选稿；是否阻断由调用者按人工/无人值守策略决定。
       return null;
     }
   }
@@ -551,12 +551,51 @@ export class BatchRunner {
         ),
         entities,
         foreshadow,
+        minimumWordRatio: approvalGateEnabled(current.policy) ? 0.6 : 0.9,
       });
-      await this.database.saveFindings(
-        candidate.id,
-        chapter.id,
-        qualityFindings,
-      );
+      const failClosed = !approvalGateEnabled(current.policy);
+      if (current.policy.approvalMode === "chapter_review") {
+        const review = await this.runAncillaryCall(
+          profile,
+          apiKey,
+          chapterReviewPrompt(chapter.outline || "暂未填写", candidate.content),
+          1200,
+          signal,
+        );
+        const reviewFindings = review ? safeParseReview(review.content) : null;
+        if (!reviewFindings && failClosed)
+          throw new Error("AI 章节审查失败：未返回合法结果，已阻止自动接受");
+        if (review) {
+          if (reviewFindings) qualityFindings.push(...reviewFindings);
+          await this.recordUsage(
+            current,
+            profile,
+            chapter.id,
+            "chapter_review",
+            {
+              inputTokens:
+                review.inputTokens || estimateTokens(candidate.content),
+              outputTokens:
+                review.outputTokens || estimateTokens(review.content),
+              cachedTokens: review.cachedTokens,
+              measured: Boolean(review.inputTokens || review.outputTokens),
+            },
+          );
+        }
+        await this.emit({
+          ...base,
+          chapterId: chapter.id,
+          stage: "chapter_review",
+          level: reviewFindings?.length ? "warning" : reviewFindings ? "success" : "warning",
+          message: reviewFindings
+            ? reviewFindings.length
+              ? `AI 审查发现 ${reviewFindings.length} 项问题`
+              : "AI 审查通过，未发现问题"
+            : "AI 审查失败，候选稿保留等待人工处理",
+          data: { findings: reviewFindings?.map((item) => item.message) ?? [] },
+        });
+      }
+      await this.database.saveFindings(candidate.id, chapter.id, qualityFindings);
       await this.emit({
         ...base,
         chapterId: chapter.id,
@@ -614,8 +653,12 @@ export class BatchRunner {
           1800,
           signal,
         );
+        const proposals = extraction
+          ? safeParseProposals(extraction.content)
+          : null;
+        if (!proposals && failClosed)
+          throw new Error("正史事实提取失败：未返回合法结果，已阻止自动接受");
         if (extraction) {
-          const proposals = safeParseProposals(extraction.content);
           if (proposals)
             await this.database.saveFactProposals(
               candidate.id,
@@ -642,7 +685,7 @@ export class BatchRunner {
             level: proposals ? "success" : "warning",
             message: proposals
               ? `已提取 ${proposals.length} 条正史建议（时间线 ${counts!.timeline}、角色状态 ${counts!.character_state}、伏笔 ${counts!.foreshadow}），请在审阅候选稿时一并处理`
-              : "正史建议提取失败（模型未返回合法 JSON），不影响候选稿",
+              : "正史建议提取失败（模型未返回合法 JSON），候选稿保留等待人工处理",
             data: { proposals: proposals?.length ?? 0 },
           });
           await this.recordUsage(
@@ -659,50 +702,6 @@ export class BatchRunner {
               measured: Boolean(
                 extraction.inputTokens || extraction.outputTokens,
               ),
-            },
-          );
-        }
-      }
-      if (current.policy.approvalMode === "chapter_review") {
-        const review = await this.runAncillaryCall(
-          profile,
-          apiKey,
-          chapterReviewPrompt(chapter.outline || "暂未填写", candidate.content),
-          1200,
-          signal,
-        );
-        if (review) {
-          const reviewFindings = safeParseReview(review.content);
-          if (reviewFindings.length)
-            await this.database.saveFindings(
-              candidate.id,
-              chapter.id,
-              reviewFindings,
-            );
-          await this.emit({
-            ...base,
-            chapterId: chapter.id,
-            stage: "chapter_review",
-            level: reviewFindings.length ? "warning" : "success",
-            message: reviewFindings.length
-              ? `AI 审查发现 ${reviewFindings.length} 项问题`
-              : "AI 审查通过，未发现问题",
-            data: {
-              findings: reviewFindings.map((item) => item.message),
-            },
-          });
-          await this.recordUsage(
-            current,
-            profile,
-            chapter.id,
-            "chapter_review",
-            {
-              inputTokens:
-                review.inputTokens || estimateTokens(candidate.content),
-              outputTokens:
-                review.outputTokens || estimateTokens(review.content),
-              cachedTokens: review.cachedTokens,
-              measured: Boolean(review.inputTokens || review.outputTokens),
             },
           );
         }
@@ -770,7 +769,7 @@ function safeParseReview(raw: string) {
   try {
     return parseChapterReview(raw);
   } catch {
-    return [];
+    return null;
   }
 }
 function safeParseProposals(raw: string) {

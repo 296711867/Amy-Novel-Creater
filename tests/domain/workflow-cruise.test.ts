@@ -50,6 +50,7 @@ function state(
   id: string,
   characterId: string,
   summary: string,
+  updatedAt = now,
 ): CharacterState {
   return {
     id,
@@ -69,7 +70,7 @@ function state(
     skills: [],
     source: "manual",
     createdAt: now,
-    updatedAt: now,
+    updatedAt,
   };
 }
 function thread(id: string, title: string, status: string): ForeshadowThread {
@@ -122,8 +123,9 @@ describe("封存实际结束状态起草", () => {
         },
       ],
       characterStates: [
-        state("s1", "e1", "第 11 章的旧状态"),
-        state("s2", "e1", "通过卷末检验，掌握母亲笔迹线索"),
+        // 仓储实际按 updatedAt DESC 返回；封存逻辑必须与输入顺序无关。
+        state("s2", "e1", "通过卷末检验，掌握母亲笔迹线索", "2026-09-03T00:00:00.000Z"),
+        state("s1", "e1", "第 11 章的旧状态", "2026-09-01T00:00:00.000Z"),
         state("s3", "e2", "留在现实照看病危的顾董"),
       ],
       foreshadow: [

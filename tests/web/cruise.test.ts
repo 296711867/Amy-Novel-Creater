@@ -58,6 +58,7 @@ const backend = vi.hoisted(() => {
       startBackgroundBatch: [] as string[],
       generateNovelPlan: [] as string[],
       createGenerationDraft: [] as unknown[],
+      setBatchStatus: [] as unknown[],
     },
     /** 挂起模拟：这些提案的 review 调用永不返回（看门狗用例）。 */
     hangProposalIds: [] as string[],
@@ -195,6 +196,25 @@ vi.mock("@renderer/platform/web-platform", () => ({
       }
       return Promise.resolve();
     },
+    pauseBackgroundBatch: (batchId: string) => {
+      const batch = backend.batches.find((item) => item.id === batchId);
+      if (batch) batch.status = "paused";
+      return Promise.resolve();
+    },
+    setBatchStatus: (
+      batchId: string,
+      status: string,
+      patch: { outputTokenBudget?: number; awaitingReview?: boolean } = {},
+    ) => {
+      backend.calls.setBatchStatus.push({ batchId, status, patch });
+      const batch = backend.batches.find((item) => item.id === batchId)!;
+      batch.status = status;
+      batch.awaitingReview = patch.awaitingReview ?? false;
+      if (patch.outputTokenBudget)
+        (batch.policy as { outputTokenBudget: number }).outputTokenBudget =
+          patch.outputTokenBudget;
+      return Promise.resolve({ ...batch });
+    },
   },
 }));
 
@@ -322,6 +342,7 @@ describe("全自动巡航（AN-035）", () => {
     expect(created.config.generationPolicy).toMatchObject({
       startChapter: 21,
       endChapter: 30,
+      approvalMode: "chapter_review",
     });
     // AN-035（二）：第 2 周期起地基已存在，只跑结构规划，不重复 1–6 步。
     expect(backend.calls.generateNovelPlan).toEqual(["structure"]);
@@ -426,6 +447,16 @@ describe("全自动巡航（AN-035）", () => {
     const cruise = store.getState().cruise["n1"];
     expect(cruise?.status).toBe("paused");
     expect(cruise?.message).toContain("Token 预算耗尽");
+    await store.getState().resumeCruise("n1");
+    expect(
+      (backend.batches[0].policy as { outputTokenBudget: number })
+        .outputTokenBudget,
+    ).toBe(66_000);
+    expect(backend.calls.setBatchStatus).toContainEqual({
+      batchId: "b-budget",
+      status: "paused",
+      patch: { outputTokenBudget: 66_000 },
+    });
   });
 
   it("completed 但章节未全部入正史 → 等待自动接受，不封存", async () => {
@@ -588,7 +619,7 @@ describe("全自动巡航（AN-035）", () => {
     expect((run as { status?: string }).status).toBe("completed");
   });
 
-  it("看门狗：单步挂起不返回时超时解锁并明示，不再永久卡死（AN-035）", async () => {
+  it("看门狗：单步耗时过长时保持防重入锁，不启动重复任务", async () => {
     vi.useFakeTimers();
     try {
       seedRun({
@@ -611,11 +642,12 @@ describe("全自动巡航（AN-035）", () => {
       // 第一轮：卡在挂起的提案上不返回。
       const first = store.getState().tickCruise("n1");
       await vi.advanceTimersByTimeAsync(391_000);
-      // 看门狗已解锁并明示状态；巡航未被误判为失败。
+      // 看门狗仅提示；再次 tick 不得重复处理同一提案。
       expect(store.getState().cruise["n1"]?.status).toBe("active");
-      expect(store.getState().cruise["n1"]?.message).toContain("超时");
-      backend.hangProposalIds = [];
-      void first; // 挂起的检查轮保持 pending，看门狗已解锁，不 await。
+      expect(store.getState().cruise["n1"]?.message).toContain("未启动重复任务");
+      await store.getState().tickCruise("n1");
+      expect(backend.calls.reviewPlanningProposal).toHaveLength(0);
+      void first;
     } finally {
       vi.useRealTimers();
     }

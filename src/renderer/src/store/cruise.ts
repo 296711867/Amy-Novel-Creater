@@ -18,10 +18,10 @@ const CRUISE_INTERVAL_MS = 3000;
 const CRUISE_STORAGE_KEY = "amy-novel:cruise";
 const cruiseTimers = new Map<string, number>();
 const cruiseTicking = new Set<string>();
-const cruiseTickGen = new Map<string, number>();
 const cruiseFailures = new Map<string, number>();
 /** 单轮检查看门狗时限：规划模型调用最长等待 300 秒，留足余量。 */
 const CRUISE_TICK_TIMEOUT_MS = 390_000;
+const CRUISE_BUDGET_TOP_UP = 60_000;
 
 export function readPersistedCruise(): Record<string, CruiseState> {
   try {
@@ -108,16 +108,48 @@ export function createCruiseActions(set: NovelStateSet, get: NovelStateGet) {
     cruiseFailures.delete(novelId);
     if (message) get().setAutoReview(novelId, false, message);
   },
-  resumeCruise(novelId) {
+  async resumeCruise(novelId) {
     const current = get().cruise[novelId];
     if (!current?.enabled) return;
+    let resumeMessage = "已继续巡航";
+    if (current.message.includes("Token 预算耗尽")) {
+      try {
+        const runs =
+          get().workflowRuns[novelId] ??
+          (await get().loadWorkflowRuns(novelId), get().workflowRuns[novelId] ?? []);
+        const run = runs[0];
+        const batches = await get().loadBatches();
+        const batch =
+          (run?.batchId
+            ? batches.find((item) => item.id === run.batchId)
+            : null) ??
+          batches.find(
+            (item) =>
+              item.novelId === novelId &&
+              item.outputTokensUsed >= item.policy.outputTokenBudget,
+          );
+        if (batch) {
+          const outputTokenBudget =
+            Math.max(batch.policy.outputTokenBudget, batch.outputTokensUsed) +
+            CRUISE_BUDGET_TOP_UP;
+          await get().setBatchStatus(batch.id, "paused", { outputTokenBudget });
+          resumeMessage = `已追加 ${CRUISE_BUDGET_TOP_UP.toLocaleString()} 输出 token 并继续巡航`;
+        }
+      } catch (error) {
+        noteCruise(
+          novelId,
+          `追加批次预算失败（${error instanceof Error ? error.message : "未知错误"}），巡航仍保持暂停。`,
+        );
+        return;
+      }
+    }
     set({
       cruise: {
         ...get().cruise,
         [novelId]: {
           ...current,
           status: "active",
-          message: "已继续巡航：正在检查进度（可能含 1–5 分钟模型规划，实时动态见「生成任务」页）…",
+          message: `${resumeMessage}：正在检查进度（可能含 1–5 分钟模型规划，实时动态见「生成任务」页）…`,
           updatedAt: new Date().toISOString(),
         },
       },
@@ -133,24 +165,24 @@ export function createCruiseActions(set: NovelStateSet, get: NovelStateGet) {
     if (!cruise?.enabled || cruise.status !== "active" || cruiseTicking.has(novelId))
       return;
     // 巡航的正文段依赖自动审阅（候选稿 + 正史建议 + 续写下一章）。
-    if (!get().autoReview[novelId]?.enabled)
+    const autoReview = get().autoReview[novelId];
+    if (!autoReview)
       get().setAutoReview(novelId, true, "巡航模式：自动接受已联动开启。");
+    else if (!autoReview.enabled) {
+      pauseCruise(
+        novelId,
+        `自动接受已停止（${autoReview.message || "原因未知"}），巡航已暂停，避免绕过质量门。`,
+      );
+      return;
+    }
     cruiseTicking.add(novelId);
-    // 心跳看门狗（AN-035）：任一步 IPC 挂起不返回时，旧实现的防重入锁会
-    // 永久占死（线上形态：永远停在“正在检查当前进度”，停止/重启无效）。
-    // 超时强制解锁并明示状态，下一轮重试；代际标记防止旧轮 finally
-    // 误删新轮的锁。超时不算失败——含模型调用的检查轮最长 300 秒属正常。
-    const generation = (cruiseTickGen.get(novelId) ?? 0) + 1;
-    cruiseTickGen.set(novelId, generation);
+    // 底层模型请求自带超时；这里只报告慢任务。强制解锁会让旧轮与新轮
+    // 并发，可能重复建批次、重复规划或重复封存。
     const watchdog = window.setTimeout(() => {
-      if (
-        cruiseTicking.has(novelId) &&
-        cruiseTickGen.get(novelId) === generation
-      ) {
-        cruiseTicking.delete(novelId);
+      if (cruiseTicking.has(novelId)) {
         noteCruise(
           novelId,
-          "上一轮检查超时（可能含最长数分钟的模型调用），已解锁，下一轮自动重试。",
+          "本轮检查耗时较长（可能含数分钟模型调用），仍在等待，未启动重复任务。",
         );
       }
     }, CRUISE_TICK_TIMEOUT_MS);
@@ -194,7 +226,7 @@ export function createCruiseActions(set: NovelStateSet, get: NovelStateGet) {
           chapterWords: novel.chapterWords,
           continuityCheck: true,
           maxRetries: 2,
-          approvalMode: "candidate",
+          approvalMode: "chapter_review",
           outputTokenBudget: 120000,
           concurrency: 1,
           deepThinking: false,
@@ -545,6 +577,7 @@ export function createCruiseActions(set: NovelStateSet, get: NovelStateGet) {
             ? "structure"
             : undefined,
       );
+      get().setAutoReview(novelId, true, "巡航模式：新周期自动接受已启动。");
       noteCruise(
         novelId,
         `第 ${policy.startChapter}–${policy.endChapter} 章已封存，开始规划第 ${next.startChapter}–${next.endChapter} 章。`,
@@ -563,8 +596,7 @@ export function createCruiseActions(set: NovelStateSet, get: NovelStateGet) {
       }
     } finally {
       window.clearTimeout(watchdog);
-      if (cruiseTickGen.get(novelId) === generation)
-        cruiseTicking.delete(novelId);
+      cruiseTicking.delete(novelId);
     }
   },
   };

@@ -215,7 +215,16 @@ export const IPC_WRITE_GUARDS: Record<string, ArgumentGuard[]> = {
       outputTokenBudget: num({ min: 1, int: true }),
     }),
   ],
-  [IPC_CHANNELS.setBatchStatus]: [id(), oneOf(batchStatuses), optional(obj({}))],
+  [IPC_CHANNELS.setBatchStatus]: [
+    id(),
+    oneOf(batchStatuses),
+    optional(
+      obj({
+        awaitingReview: optional(boolean()),
+        outputTokenBudget: optional(num({ min: 1, int: true })),
+      }),
+    ),
+  ],
   [IPC_CHANNELS.deleteGenerationBatch]: [id()],
   [IPC_CHANNELS.updateGenerationJob]: [
     id(),

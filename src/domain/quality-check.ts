@@ -43,6 +43,8 @@ export interface QualityCheckInput {
   scenes: StoryScene[];
   entities: StoryEntity[];
   foreshadow: ForeshadowThread[];
+  /** 正文最少达到目标字数的比例；人工流程默认 60%，无人值守流程使用 90%。 */
+  minimumWordRatio?: number;
 }
 export function assertCandidateAcceptedForCanon(
   candidate: Pick<ChapterCandidate, "status"> | null | undefined,
@@ -86,12 +88,13 @@ export function checkCandidateQuality(
 ): ContinuityFinding[] {
   const findings: ContinuityFinding[] = [],
     words = input.content.replace(/\s+/g, "").length;
-  if (words < input.chapter.targetWords * 0.6)
+  const minimumWordRatio = input.minimumWordRatio ?? 0.6;
+  if (words < input.chapter.targetWords * minimumWordRatio)
     findings.push({
       id: "length:short",
       severity: "error",
       category: "length",
-      message: `正文仅 ${words} 字，低于目标字数的 60%`,
+      message: `正文仅 ${words} 字，低于目标字数的 ${Math.round(minimumWordRatio * 100)}%`,
       evidence: `目标 ${input.chapter.targetWords} 字`,
     });
   if (!input.content.trim())

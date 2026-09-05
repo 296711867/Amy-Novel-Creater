@@ -255,7 +255,7 @@ const api: AmyNovelApi = {
   setBatchStatus: (
     id: string,
     status: GenerationBatch["status"],
-    patch?: { awaitingReview?: boolean },
+    patch?: { awaitingReview?: boolean; outputTokenBudget?: number },
   ) => ipcRenderer.invoke(IPC_CHANNELS.setBatchStatus, id, status, patch),
   deleteGenerationBatch: (id: string) =>
     ipcRenderer.invoke(IPC_CHANNELS.deleteGenerationBatch, id),
