@@ -61,6 +61,8 @@ novel-store 续切）为可维护性重构，非缺陷，留待后续按切片�
 
 
 
+
+2026-09-07：AN-041 收口 Web 端接受候选稿后的任务状态刷新缺陷（详见 P1 表）。同期新增实验性外部工具（不属产品能力）：`scripts/amy-author-model.mjs`（本地 OpenAI 兼容"作者模型"示例）、`scripts/author-headless.mjs`（项目数据包无头批处理 CLI）、`docs/AI_AUTHORING_WORKFLOW.md`（AI 主笔操控写作工作流记录，含 120 章完本示例数据）。
 ## P0：数据正确性与连续性
 
 | ID | 状态 | 事项 | 当前证据 | 完成验收 |
@@ -108,6 +110,7 @@ novel-store 续切）为可维护性重构，非缺陷，留待后续按切片�
 | AN-034 | [x] | 全局微调（查找 → 逐章预览 → 确认替换 + 版本快照） | `domain/revision.ts`：确定性全书查找（计数+首命中上下文预览，空词拒绝、单字允许）与整章替换（同词/空词不执行、替换为空即删除）。连读页「全局修订」面板：输入查找/替换词即时检索 → 命中章节列表（预览片段高亮）→ 逐章 confirm 确认替换 → `saveChapter` createSnapshot=true（origin=manual，写作台版本历史可回滚），并明示正史记忆不自动联动（AN-021 范围） | `tests/domain/revision.test.ts` 5 项（跨章命中/空词拒绝/单字/计数/删除语义）；`pnpm check` 通过 |
 | AN-039 | [x] | 全自动创作安全链收口 | 双端无人值守批次统一启用 `chapter_review`；90% 字数门、AI 语义 findings 与本地 findings 共同驱动最多 2 轮重写；AI 审查/事实提取失败 fail-closed；全局校验异常不再吞错；看门狗超时保持防重入锁；封存按 `updatedAt` 选择人物最新状态；预算耗尽后「继续巡航」自动追加 60,000 tokens | 域/巡航/自动审阅/数据库与 Web 真实适配回归覆盖；`pnpm check` 247 项通过；双端生产构建见验收报告 |
 | AN-040 | [x] | 分章文本 ZIP 导出 | 导出页新增标准 ZIP（Store）下载：作品信息、汇总设定、每章独立 TXT；只包含已入正史且非空章节，按章号排序，文件名兼容 Windows；无第三方依赖 | `tests/domain/text-archive.test.ts` 覆盖文件清单、正史过滤、设定内容与 ZIP 目录签名；`pnpm check` 通过 |
+| AN-041 | [x] | 接受候选稿后同步刷新批次任务状态 | Web 端接受/拒绝候选稿后，store 内 jobs/batches 立即与平台层落库结果对齐；修复此前内存任务仍停留在 candidate_ready、『继续生成下一章』被陈旧 awaitingBlocker 渲染为禁用按钮、点击无响应的问题 | 修复前连跑批次每章必卡死需删批重建；修复后 120 章连续生成零卡死；`pnpm check` 247 项测试与双端类型检查通过（2026-09-06 运行） |
 
 ## 已完成基础能力
 

@@ -1291,6 +1291,16 @@ export const useNovelStore = create<NovelState>((set, get) => ({
         });
       }
     }
+    // 平台层在处理建议后会把任务从 candidate_ready 翻转为 completed，
+    // 但内存里的 jobs 仍是旧状态，“继续生成下一章”会被陈旧的
+    // awaitingBlocker 渲染成禁用按钮，点击无响应。这里同步刷新。
+    for (const [batchId, jobs] of Object.entries(get().jobs)) {
+      if (jobs.some((value) => value.candidateId === id)) {
+        await get().loadJobs(batchId);
+        await get().loadBatches();
+        break;
+      }
+    }
     return item;
   },
   async loadBatches() {
