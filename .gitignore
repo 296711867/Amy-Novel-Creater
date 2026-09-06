@@ -12,3 +12,6 @@ dist-web/
 !.env.example
 release/
 build/
+
+# 创作数据备份（大文件，内容已由 scripts/amy-author-model.mjs 携带）
+backups/
