@@ -82,6 +82,12 @@ function cmdExpand(pkg, texts) {
     const ch = pkg.chapters.find((c) => c.position === pos);
     if (!ch) { console.warn(`  ! 第${pos}章不存在，跳过`); continue; }
     if (typeof content !== "string" || content.trim().length === 0) { console.warn(`  ! 第${pos}章内容为空，跳过`); continue; }
+    // 防降级守卫：新内容比现有正文更短时强警告（除非 --allow-shrink）
+    if (wordCount(content) < ch.wordCount && !process.argv.includes("--allow-shrink")) {
+      console.warn(`  ⚠ 第${pos}章新内容 ${wordCount(content)} 字 < 现有 ${ch.wordCount} 字（疑似降级）。`);
+      console.warn(`     确认是有意修订请加 --allow-shrink；本次跳过该章。`);
+      continue;
+    }
     // 追加版本快照（origin manual，versionNo 递增），保留回滚能力
     pkg.versions = pkg.versions || [];
     const lastNo = pkg.versions
