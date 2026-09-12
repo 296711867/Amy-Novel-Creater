@@ -73,6 +73,9 @@ novel-store 续切）为可维护性重构，非缺陷，留待后续按切片�
 | AN-004 | [x] | 低温 JSON 修复一次 | Electron/Web 在规划 JSON/Schema 解析失败时以 0.1 温度修复一次；业务完整性错误不触发；`planning_runs` 分别保存原始与修复响应并累计 Token，旧库和旧项目包兼容 | 修复成功与二次失败测试、SQLite 留痕测试通过；`pnpm verify` 通过（98 项测试，双端生产构建） |
 | AN-005 | [x] | 实体短引用、跨阶段合并与周期去重 | 规划 Prompt 用实体 ID 派生的稳定短引用；明确引用或名称/别名完全匹配才更新；限定名同核心称呼生成全局合并提案，不静默合并或建双卡；已接受/待审新增提案跨周期去重 | Domain、Application、SQLite、项目导入短引用重映射测试通过；`pnpm verify` 通过（102 项测试，双端生产构建） |
 | AN-006 | [x] | Web 长篇存储迁移到 IndexedDB | `web-storage.ts` 以内存镜像保持原同步 read/write 接口，全部 `amy-novel:` 键落 IndexedDB；启动一次性迁入旧 localStorage 数据并清源；首屏读取前经 `PlatformPort.ready()` 等待装载 | jsdom + fake-indexeddb 测试覆盖迁移清源、60 章×3200 字重载恢复且 localStorage 无数据键、项目包导入往返与删除清理；`pnpm verify` 通过 |
+| AN-042 | [x] | 巡航与自动审阅的批次收工竞态 | 2026-09-11 Web 端新书巡航 1–20 章实测定位：Web 端首轮 `tickCruise` 同步跑完整批（规划+建批+全部候选生成），期间自动审阅先把候选全部接受并按"本批次已全部完成"自停；下一轮巡航 tick 顶部见 `autoReview.enabled=false` 即 `pauseCruise`，两个周期边界各暂停一次。修复（2026-09-12）：`tickCruise` 顶部检查识别"本批次已全部完成"的正常自停，重新联动开启自动接受并继续本轮检查（封存/建新批/收工由后续分支判定）；其余停用原因仍 fail-closed 暂停 | `tests/web/cruise.test.ts` 新增双向回归：正常自停→不暂停、重新联动并照常封存续跑；质量门停用→仍暂停。`pnpm check` 251 项通过；2026-09-12 巡航连跑 21–120 章全程无人值守收工 |
+| AN-043 | [x] | 巡航暂停后卡片不可达 | 2026-09-11 实测：周期封存后 `invalidatePlanning(7)` 使向导退回第 7 步，第 8–10 步锁定；巡航卡片只在第 10 步渲染，作者看不到暂停原因也点不到「继续巡航」。修复（2026-09-12）：巡航启用（含 paused）期间卡片在任意步骤可见，未启用时保持原行为（仅第 10 步）；Autopilot 卡片不随之前置 | `tests/web/cruise-card-visibility.test.tsx`：未启用→第 7 步无卡片；paused→第 7 步渲染卡片与「继续巡航」按钮且 Autopilot 卡片不出现。`pnpm check` 251 项通过 |
+| AN-044 | [x] | Web 端批次中断留下"黑洞章" | 2026-09-12 实测（巡航 31–40 章）：页面刷新杀死进行中的生成请求后，任务永停 `generating`；自动审阅 5 分钟后的"运行器丢失"接管重新派发批次，但循环跳过 generating 任务把批次收成 completed——该章永远没有候选稿，巡航停在 9/10。修复：`runBatch` 入口把孤儿任务（generating/building_context）重置回 queued 重新生成（单执行器+防重入语义下，入口见到的进行中任务必属已死运行器） | 线上实证：卡住的第 37 章重置后自动重生成入正史，巡航继续连跑到 120 章完本。回归测试欠账：现有测试骨架均为 Electron 宿主（`startBackgroundBatch` 直通），Web 端 `runBatch` 入口逻辑需要补一个 Web 宿主运行器测试（后续 AN-013 拆分时一并补） |
 
 ## P1：可维护性、测试与发布安全
 
@@ -85,6 +88,7 @@ novel-store 续切）为可维护性重构，非缺陷，留待后续按切片�
 | AN-014 | [x] | 建立可重复 CI | `.github/workflows/ci.yml`（2026-09-02）：PR/推送到 main 运行 `pnpm check`（typecheck:node+web 与全量测试）；release 分支与 v* 标签追加 `pnpm verify`（check + Web/Electron 双端生产构建）；pnpm/action-setup 按 package.json 的 pnpm@11.19.0 安装、setup-node 缓存 pnpm store、`--frozen-lockfile` 锁定依赖 | 工作流语法由 YAML 结构核对（本地无 GitHub Runner）；「失败阻止合并」需在 GitHub 仓库 Settings→Branches 把 check（及 release 的 verify）设为必需状态检查——这步只能在仓库设置里做，非仓库文件可表达。首次推送后确认运行绿 |
 | AN-015 | [!] | Windows 商业签名与自动更新 | 需要证书和发布源，不属于仓库内可独立完成事项 | 用户提供证书/发布渠道后，签名安装包和更新回滚冒烟通过 |
 | AN-025 | [x] | 规划页白屏修复与渲染层崩溃兜底 | 三处 selector 兜底 `?? []` 改为模块级常量（`PlanningWorkflowPage` 的 activityEvents、`App.tsx` GeneratePage 的 planningCycles、`BatchesPage` ActivityLog 的 activityEvents）；`main.tsx` 增加全局 `ErrorBoundary`（返回首页/重新加载），任何页面级渲染异常不再整站白屏；规范新增 Renderer selector 稳定引用硬规则（`DEVELOPMENT_GUIDE.md` §6/§7） | `tests/web/planning-workflow-mount.test.tsx` 在空数据状态整页挂载规划页：旧写法失败、新写法通过（双向验证）；`pnpm check` 通过（148 项测试）；浏览器复现路径（首页→点击作品→规划页第 1/10 步正常渲染）验证通过，见 `ACCEPTANCE_REPORT.md` 2026-08-31 |
+| AN-045 | [ ] | Web 端后台页面定时器深度节流拖慢巡航 | 2026-09-12 实测：跑批页面被遮挡/失焦时，Electron webview 把 DOM 定时器节流到最低 1 次/分钟——巡航 3s tick 与自动审阅 2s tick 慢 30 倍（每章接受从秒级退化到约 2 分钟）。本次用同源 Worker 驱动 `tickCruise`/`tickAutoReview` 临时绕过（脚本已删）。产品化方向：把编排定时器挪进 Worker（消息唤醒主线程执行动作），或至少在巡航横幅提示"页面在后台会被节流，请保持前台" | 长跑验证：Worker 驱动下接受节奏恢复秒级，41–120 章无人值守连跑完成；改造后 jsdom+fake-indexeddb 测试覆盖"Worker 定时消息驱动 tick 不重复执行（防重入锁生效）" |
 
 ## P2：产品能力
 

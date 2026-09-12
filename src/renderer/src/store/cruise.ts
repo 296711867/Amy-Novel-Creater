@@ -169,11 +169,23 @@ export function createCruiseActions(set: NovelStateSet, get: NovelStateGet) {
     if (!autoReview)
       get().setAutoReview(novelId, true, "巡航模式：自动接受已联动开启。");
     else if (!autoReview.enabled) {
-      pauseCruise(
-        novelId,
-        `自动接受已停止（${autoReview.message || "原因未知"}），巡航已暂停，避免绕过质量门。`,
-      );
-      return;
+      // AN-042：批次候选全部入正史后自动审阅按规则自停（“本批次已全部完成”），
+      // 这是周期收尾的正常状态，不是质量门停机——Web 端首轮 tick 同步跑完
+      // 整批时两者必然交错。重新联动开启并继续本轮检查（封存/建新批次/收工
+      // 由后续分支判定）；其余停用原因仍按 fail-closed 暂停巡航。
+      if ((autoReview.message ?? "").includes("本批次已全部完成")) {
+        get().setAutoReview(
+          novelId,
+          true,
+          "巡航模式：周期收尾，自动接受已重新联动。",
+        );
+      } else {
+        pauseCruise(
+          novelId,
+          `自动接受已停止（${autoReview.message || "原因未知"}），巡航已暂停，避免绕过质量门。`,
+        );
+        return;
+      }
     }
     cruiseTicking.add(novelId);
     // 底层模型请求自带超时；这里只报告慢任务。强制解锁会让旧轮与新轮

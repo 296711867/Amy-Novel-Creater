@@ -1058,9 +1058,11 @@ export function PlanningWorkflowPage(): React.JSX.Element {
             </div>
           )}
 
-          {activeStep === 10 && (
-            <>
-              <div className="workflow-card cruise-card">
+          {/* AN-043：巡航启用（含 paused）时卡片在任意步骤可见——周期封存后
+              向导会退回第 7 步，第 10 步被锁住会让作者看不到暂停原因、
+              点不到「继续巡航」。未启用时保持原行为（仅第 10 步展示）。 */}
+          {(cruise?.enabled || activeStep === 10) && (
+            <div className="workflow-card cruise-card">
                 <h3>全自动巡航（自动规划 + 自动创作）</h3>
                 {cruise?.enabled ? (
                   <>
@@ -1145,6 +1147,9 @@ export function PlanningWorkflowPage(): React.JSX.Element {
                   </>
                 )}
               </div>
+          )}
+          {activeStep === 10 && (
+            <>
               <div className="workflow-card autopilot-card">
                 <h3>Autopilot 自动运行</h3>
                 <p>

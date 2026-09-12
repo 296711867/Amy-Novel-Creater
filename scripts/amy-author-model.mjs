@@ -7568,6 +7568,16 @@ const CYCLE12 = {
 };
 
 // 策划阶段（第 121 章起）先返回占位骨架；真正启用前由主笔逐周期重写正稿。
+/** 用正文开头（去空白后前 30 字）反查 CHAPTER_PROSE 的章号；找不到返回 0。 */
+function chapterNumberByProse(content) {
+  const head = String(content).replace(/\s+/g, "").slice(0, 30);
+  if (head.length < 10) return 0;
+  for (const [num, prose] of Object.entries(CHAPTER_PROSE)) {
+    if (String(prose).replace(/\s+/g, "").startsWith(head)) return Number(num);
+  }
+  return 0;
+}
+
 const RESPONSES = {
   style: () => STYLE_ANALYSIS,
   brief: () => BRIEF_DRAFT,
@@ -7577,8 +7587,12 @@ const RESPONSES = {
   cast: () => CAST,
   scenes: () => SCENES,
   facts: (prompt) => {
+    // 软件的事实提取提示词只带正文不带章号（"正文：\n{{content}}"），
+    // 所以先按章号、再按正文开头反查章号，否则永远返回空提案。
     const m = /第(\d+)章/.exec(prompt);
-    return CHAPTER_FACTS[m ? Number(m[1]) : 0] ?? { proposals: [] };
+    let num = m ? Number(m[1]) : 0;
+    if (!CHAPTER_FACTS[num]) num = chapterNumberByProse(prompt.split("正文：").pop() ?? prompt);
+    return CHAPTER_FACTS[num] ?? { proposals: [] };
   },
   review: () => REVIEW_EMPTY,
   structure: (prompt) => {

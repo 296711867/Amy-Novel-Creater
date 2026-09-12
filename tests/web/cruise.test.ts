@@ -499,6 +499,46 @@ describe("全自动巡航（AN-035）", () => {
     expect(store.getState().cruise["n1"]?.message).toContain("已封存");
   });
 
+  it("AN-042：自动审阅按「本批次已全部完成」自停 → 巡航重新联动并照常封存续跑，不暂停", async () => {
+    seedRun({});
+    seedChapters(21, 30, "accepted");
+    seedCycle(21, 30, "generating");
+    store.setState({
+      cruise: { n1: { enabled: true, status: "active", targetChapter: 40, message: "", updatedAt: backend.now } },
+      // 线上形态：Web 端首轮 tick 同步跑完整批，自动审阅先把候选全部接受，
+      // 按自身规则自停；巡航下一轮撞上「已停用」就误判为质量门停机。
+      autoReview: {
+        n1: { enabled: false, message: "本批次已全部完成，自动接受已自动关闭。" },
+      },
+    });
+    await store.getState().tickCruise("n1");
+    expect(store.getState().cruise["n1"]?.status).toBe("active");
+    expect(store.getState().autoReview["n1"]?.enabled).toBe(true);
+    const sealed = backend.calls.savePlanningCycle[0] as { status: string };
+    expect(sealed?.status).toBe("completed");
+    const created = backend.calls.createWorkflowRun[0] as {
+      config: { generationPolicy: { startChapter: number } };
+    };
+    expect(created?.config.generationPolicy.startChapter).toBe(31);
+  });
+
+  it("AN-042（反向）：自动审阅因质量门停用 → 巡航仍 fail-closed 暂停", async () => {
+    seedRun({});
+    seedChapters(21, 30, "accepted");
+    seedCycle(21, 30, "generating");
+    store.setState({
+      cruise: { n1: { enabled: true, status: "active", targetChapter: 40, message: "", updatedAt: backend.now } },
+      autoReview: {
+        n1: { enabled: false, message: "本章有 1 项未解决的 error 级检查问题，自动接受已暂停；请人工处理后再重新开启。" },
+      },
+    });
+    await store.getState().tickCruise("n1");
+    const cruise = store.getState().cruise["n1"];
+    expect(cruise?.status).toBe("paused");
+    expect(cruise?.message).toContain("自动接受已停止");
+    expect(backend.calls.savePlanningCycle).toHaveLength(0);
+  });
+
   it("检查点运行的策划包待审 → 代确认后续跑（策划包门禁自愈）", async () => {
     seedRun({
       mode: "checkpoint",
