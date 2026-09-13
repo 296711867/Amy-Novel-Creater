@@ -84,10 +84,16 @@ export function createCruiseActions(set: NovelStateSet, get: NovelStateGet) {
   return {
   async startCruise(novelId, targetChapter) {
     // AN-053：重放场景清理。陈旧的已完成运行索引会让巡航把旧进度当现状
-    // （误冲线/复用旧批次）。运行索引不是正史数据——批次、候选、正史与
-    // 审计事件都不受影响。
+    // （误冲线/复用旧批次）。只清理「已完结」的索引——若有进行中/暂停的
+    // 运行（作者手动启动的 Autopilot 等），保留索引让巡航接管续跑，而不是
+    // 抹掉在途工作导致重复建批被单批次门禁拒绝。运行索引不是正史数据——
+    // 批次、候选、正史与审计事件都不受影响。
     try {
-      await get().clearWorkflowRuns(novelId);
+      const existing = await get().loadWorkflowRuns(novelId);
+      const hasLive = existing.some(
+        (item) => item.status === "running" || item.status === "paused",
+      );
+      if (!hasLive) await get().clearWorkflowRuns(novelId);
     } catch {
       // 清理失败不阻断开启：巡航 tick 会以当前索引继续。
     }
@@ -450,24 +456,28 @@ export function createCruiseActions(set: NovelStateSet, get: NovelStateGet) {
       if (run.batchId) {
         const batchJobs = await get().loadJobs(run.batchId);
         const pendingNew: number[] = [];
-        for (const item of batchJobs) {
-          if (!item.chapterId) continue;
-          const all = await platform.listChapterCandidates(item.chapterId);
-          const newest = all[0];
-          if (newest?.status === "candidate") pendingNew.push(item.position);
-        }
         // AN-052：等待窗口。本批次生成的新候选可能晚于上一次检查落库
-        // （生成中检查不到 → 检查完落库 → 封存直接冲线）。凡任务更新时间
-        // 晚于本轮运行启动的章节，其最新候选必须为 accepted 才算收尾。
-        const runStart = new Date(run.updatedAt).getTime();
+        // （生成中检查不到 → 检查完落库 → 封存直接冲线）。凡任务在本轮
+        // 运行期间被更新过（job.updatedAt ≥ run.createdAt）的章节，其
+        // 最新候选必须为 accepted 才算收尾。注意基准是 createdAt——
+        // completed 分支时 run.updatedAt 已被终态更新推到「刚刚」，用它
+        // 会让本检查永远跳过（失效防护）。
+        const runStart = new Date(run.createdAt).getTime();
         for (const item of batchJobs) {
-          if (pendingNew.includes(item.position)) continue;
           if (!item.chapterId) continue;
-          if (new Date(item.updatedAt).getTime() < runStart) continue;
           const all = await platform.listChapterCandidates(item.chapterId);
           const newest = all[0];
-          if (newest && newest.status !== "accepted")
+          if (newest?.status === "candidate") {
             pendingNew.push(item.position);
+            continue;
+          }
+          if (
+            new Date(item.updatedAt).getTime() >= runStart &&
+            newest &&
+            newest.status !== "accepted"
+          ) {
+            pendingNew.push(item.position);
+          }
         }
         if (pendingNew.length) {
           const auto = get().autoReview[novelId];
@@ -530,29 +540,35 @@ export function createCruiseActions(set: NovelStateSet, get: NovelStateGet) {
       }
       // AN-050：封存前消化本周期残留的正史建议。竞态下（AN-049 改指新稿
       // 接受）较早候选的建议可能晚于「接受」动作产生，自动接受的第二步
-      // 已经跑过，封存门禁会因「仍有建议未处理」拒绝。巡航授权语义与
-      // 自动接受一致：这里的建议全部自动接受（单条失败不阻断，转人工）。
+      // 已经跑过，封存门禁会因「仍有建议未处理」拒绝。处理口径与内容对齐：
+      // 候选内容与当前正史一致 → 接受（与自动接受同语义）；候选已被新稿
+      // 取代（内容不一致）→ 拒绝——被放弃草稿的事实不属于正史。
       try {
         let handled = 0;
-        // AN-050（修正）：封存门禁检查的是「该周期全部 accepted 候选」的
-        // pending 建议（含竞态中落选的旧候选），所以这里也要按同一口径遍历，
-        // 而不是只看批次任务当前指向的候选。
+        // 门禁检查的是「该周期全部 accepted 候选」的 pending 建议（含竞态
+        // 中落选的旧候选），所以这里按同一口径遍历。
         const candidatesByKey = new Map();
         for (const ch of rangeChapters) {
           const all = await platform.listChapterCandidates(ch.id);
           for (const cand of all) {
             if (cand.status !== "accepted") continue;
-            candidatesByKey.set(cand.id, cand);
+            candidatesByKey.set(cand.id, { cand, chapter: ch });
           }
         }
-        for (const [candId] of candidatesByKey) {
+        for (const [candId, { cand, chapter }] of candidatesByKey) {
+          const superseded =
+            cand.content !== chapter.content ||
+            cand.wordCount !== chapter.wordCount;
           const proposals = await platform.listFactProposals(candId);
           const pending = proposals.filter((item) => item.status === "proposed");
           for (const proposal of pending) {
             try {
-              await get().reviewFactProposal(candId, proposal.id, true, {
-                autoCreateCharacter: true,
-              });
+              await get().reviewFactProposal(
+                candId,
+                proposal.id,
+                !superseded,
+                { autoCreateCharacter: true },
+              );
               handled++;
             } catch {
               // 单条失败不阻断封存；门禁若因此拒绝，巡航会暂停并给出原因。
