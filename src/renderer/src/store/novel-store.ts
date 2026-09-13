@@ -1609,13 +1609,17 @@ export const useNovelStore = create<NovelState>((set, get) => ({
     });
     let jobs = await get().loadJobs(batchId);
     // AN-044：孤儿任务自愈。单执行器 + activeBatchRequests 防重入语义下，
-    // 本次 runBatch 启动时仍停在 generating / building_context 的任务只能
-    // 来自已中断的上一轮运行器（页面刷新或应用重启杀死了进行中的请求）。
-    // 不重置的话该章永远不会有候选稿，而循环会跳过它直接把批次收成
-    // completed，留下“黑洞章”（线上形态：巡航停在 9/10，批次却已完成）。
+    // 本次 runBatch 启动时仍停在 generating / building_context / 重试等待
+    // 中的任务只能来自已中断的上一轮运行器（页面刷新或应用重启杀死了进行
+    // 中的请求或退避计时）。waiting_retry 的退避 setTimeout 同样随页面
+    // 死亡，不重置则该章永远停等一个不存在的计时器——循环跳过它把批次
+    // 收成 completed，留下“黑洞章”。重置统一走合法转移
+    // waiting_retry → queued。
     const orphaned = jobs.filter(
       (item) =>
-        item.status === "generating" || item.status === "building_context",
+        item.status === "generating" ||
+        item.status === "building_context" ||
+        item.status === "waiting_retry",
     );
     if (orphaned.length) {
       for (const item of orphaned)
