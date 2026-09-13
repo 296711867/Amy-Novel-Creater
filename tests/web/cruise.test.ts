@@ -64,6 +64,10 @@ const backend = vi.hoisted(() => {
     hangProposalIds: [] as string[],
     runSeq: 0,
     batchSeq: 0,
+    /** AN-047：按批次注入任务列表；不设则返回空。 */
+    jobsOverride: null as Array<Record<string, unknown>> | null,
+    /** 候选稿池：listChapterCandidates 的数据源（AN-047/AN-049 用）。 */
+    candidates: [] as Array<Record<string, unknown>>,
   };
 });
 
@@ -147,6 +151,12 @@ vi.mock("@renderer/platform/web-platform", () => ({
     },
     listChapters: () =>
       Promise.resolve(backend.chapters.map((item) => ({ ...item }))),
+    listChapterCandidates: (chapterId: string) =>
+      Promise.resolve(
+        (backend.candidates ?? []).filter(
+          (item) => item.chapterId === chapterId,
+        ),
+      ),
     listStoryEntities: () => Promise.resolve(backend.entities as never[]),
     listTimelineEvents: () => Promise.resolve(backend.timeline as never[]),
     deleteTimelineEvent: (id: string) => {
@@ -170,6 +180,10 @@ vi.mock("@renderer/platform/web-platform", () => ({
     listCharacterStates: () => Promise.resolve(backend.states as never[]),
     listForeshadowThreads: () =>
       Promise.resolve(backend.foreshadow as never[]),
+    listGenerationJobs: () =>
+      Promise.resolve(
+        (backend.jobsOverride ?? []).map((item) => ({ ...item })),
+      ),
     listGenerationBatches: () =>
       Promise.resolve(backend.batches.map((item) => ({ ...item }))),
     createGenerationDraft: (novelId: string, policy: unknown) => {
@@ -380,7 +394,9 @@ describe("全自动巡航（AN-035）", () => {
       { id: "pp1", status: "accepted" },
       { id: "pp2", status: "accepted" },
     ]);
-    expect(backend.calls.startBackgroundBatch).toEqual(["b-seed"]);
+    // 断言两次拉起：巡航恢复运行一次 + 巡航联动开启的自动接受按设计再拉起一次
+    // （awaitingReview 批次“继续生成下一章”）。产品侧 BatchRunner 有单例守卫，重复拉起幂等。
+    expect(backend.calls.startBackgroundBatch).toEqual(["b-seed", "b-seed"]);
   });
 
   it("重复新增提案（设定已存在）→ 自动拒绝跳过，巡航不停摆", async () => {
@@ -412,10 +428,77 @@ describe("全自动巡航（AN-035）", () => {
       { id: "dup1", status: "rejected" },
       { id: "pp9", status: "accepted" },
     ]);
-    expect(backend.calls.startBackgroundBatch).toEqual(["b-seed"]);
+    expect(backend.calls.startBackgroundBatch).toEqual(["b-seed", "b-seed"]);
     const cruise = store.getState().cruise["n1"];
     expect(cruise?.status).toBe("active");
     expect(cruise?.message).toContain("重复新增跳过 1");
+  });
+
+  it("AN-046：复用已就绪策划包直接进正文阶段时仍代签十步确认，建批次不被门禁拒绝", async () => {
+    seedRun({});
+    seedChapters(21, 30, "accepted");
+    seedCycle(21, 30, "generating");
+    seedCycle(31, 40, "ready");
+    backend.workflow.confirmedSteps = [1, 2, 3, 4, 5, 6];
+    store.setState({ cruise: { n1: { enabled: true, status: "active", targetChapter: 40, message: "", updatedAt: backend.now } } });
+    await store.getState().tickCruise("n1");
+    const failedRun = backend.runs.find((item) => item.status === "failed");
+    expect((failedRun?.error ?? "")).not.toContain("十步向导");
+    expect(backend.calls.createGenerationDraft.length).toBeGreaterThan(0);
+    expect(backend.workflow.confirmedSteps).toContain(9);
+  });
+
+  it("AN-047：重写场景下批次仍有待审候选时不封存冲线（章节旧稿仍是 accepted）", async () => {
+    seedRun({});
+    seedChapters(21, 30, "accepted");
+    seedCycle(21, 30, "generating");
+    backend.batches.push({
+      id: "b-seed",
+      novelId: "n1",
+      status: "completed",
+      policy: policy(21, 30),
+      outputTokensUsed: 100,
+      awaitingReview: false,
+      createdAt: backend.now,
+      updatedAt: backend.now,
+    });
+    backend.jobsOverride = [
+      // AN-049 竞态形态：任务全部 completed 且指向已接受旧稿（cd1/cd2 均
+      // accepted），但 c21 存在更新的 candidate 状态新稿——巡航必须等它
+      // 入正史，不得封存冲线。
+      { id: "j1", batchId: "b-seed", chapterId: "c21", position: 1, status: "completed", candidateId: "cd1", attempt: 0, error: "", createdAt: backend.now, updatedAt: backend.now },
+      { id: "j2", batchId: "b-seed", chapterId: "c22", position: 2, status: "completed", candidateId: "cd2", attempt: 0, error: "", createdAt: backend.now, updatedAt: backend.now },
+    ];
+    backend.candidates.push({
+      id: "cd-new",
+      novelId: "n1",
+      chapterId: "c21",
+      profileId: "p1",
+      contextHash: "h",
+      content: "重写新稿，长度达标。",
+      wordCount: 2000,
+      status: "candidate",
+      inputTokens: 1,
+      outputTokens: 1,
+      cachedTokens: 0,
+      createdAt: "2026-09-13T00:00:00.000Z",
+      updatedAt: "2026-09-13T00:00:00.000Z",
+    });
+    const candCd1 = backend.candidates.find((item) => item.id === "cd1");
+    if (candCd1) candCd1.createdAt = "2026-08-01T00:00:00.000Z";
+    store.setState({
+      cruise: { n1: { enabled: true, status: "active", targetChapter: 30, message: "", updatedAt: backend.now } },
+      autoReview: { n1: { enabled: true, message: "" } },
+    });
+    await store.getState().tickCruise("n1");
+    expect(backend.calls.savePlanningCycle).toHaveLength(0);
+    expect(backend.calls.createWorkflowRun).toHaveLength(0);
+    expect(store.getState().cruise["n1"]?.status).toBe("active");
+    store.setState({ autoReview: { n1: { enabled: false, message: "本章有 1 项 error 级检查问题" } } });
+    await store.getState().tickCruise("n1");
+    expect(store.getState().cruise["n1"]?.status).toBe("paused");
+    backend.jobsOverride = null;
+    backend.candidates = backend.candidates.filter((item) => item.id !== "cd-new");
   });
 
   it("运行失败 → 巡航暂停并记录原因（不自动重试）", async () => {

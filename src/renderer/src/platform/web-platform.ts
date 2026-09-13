@@ -1154,6 +1154,10 @@ export const webPlatform: PlatformPort = {
   async listWorkflowRuns(novelId: string) {
     return read<WorkflowRun[]>(workflowRunsKey(novelId), []);
   },
+  async clearWorkflowRuns(novelId: string) {
+    // AN-053：remove 同时清内存镜像与持久化（写穿队列）。
+    remove(workflowRunsKey(novelId));
+  },
   async reviewPlanningProposal(novelId, proposalId, status) {
     return reviewPlanningProposal(
       {
@@ -1809,7 +1813,11 @@ export const webPlatform: PlatformPort = {
     return stored;
   },
   async listChapterCandidates(chapterId: string) {
-    return read<ChapterCandidate[]>(candidatesKey(chapterId), []);
+    // AN-049：按创建时间倒序（最新在前）。写入侧是头插，但导入/恢复等
+    // 路径不保证顺序；自动接受选「最新候选」依赖确定性的排序。
+    return read<ChapterCandidate[]>(candidatesKey(chapterId), []).sort(
+      (a, b) => (a.createdAt < b.createdAt ? 1 : -1),
+    );
   },
   async listFindings(id: string) {
     return read<StoredFinding[]>(findingsKey(id), []);

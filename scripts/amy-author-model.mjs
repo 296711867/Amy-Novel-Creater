@@ -7785,6 +7785,112 @@ function sse(res, text) {
   }, 40);
 }
 
+// 正稿优先：scripts/amy-author-manuscript.json 是主笔的扩写正稿（按章号键）。
+// 每次请求现读（按 mtime 缓存），主笔可以随写随补，不需要重启本服务。
+import { readFileSync, statSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
+const MANUSCRIPT_PATH = join(dirname(fileURLToPath(import.meta.url)), "amy-author-manuscript.json");
+let manuscriptCache = null;
+let manuscriptMtime = 0;
+function readManuscript() {
+  try {
+    const mtime = statSync(MANUSCRIPT_PATH).mtimeMs;
+    if (!manuscriptCache || mtime !== manuscriptMtime) {
+      manuscriptCache = JSON.parse(readFileSync(MANUSCRIPT_PATH, "utf8"));
+      manuscriptMtime = mtime;
+    }
+  } catch {
+    manuscriptCache = manuscriptCache ?? {};
+  }
+  return manuscriptCache;
+}
+
+// ─── 长度自适应替身（测试替身，不是正稿）────────────────────────────────
+// 真实模型收到「目标约 N 字」会写足 N 字；旧替身无视字数要求返回固定短文，
+// 导致软件的 90% 字数门必然失败。这里让替身按提示词里的目标字数交付：
+// 固定正文足够长就直接用；不足则从章纲与人物目录确定性扩写到达标。
+// 扩写内容是结构性填充文（模板句 + 实体名轮换），只用于验证软件链路，
+// 不代表文学质量——正式写作请接真实模型。
+function parseTargetWords(prompt) {
+  const m = /目标约?\s*(\d+)\s*字/.exec(prompt);
+  return m ? Number(m[1]) : 0;
+}
+function parseOutline(prompt) {
+  const m = /章纲[：:]\s*([^\n]+)/.exec(prompt);
+  return m ? m[1].trim() : "";
+}
+function parseNames(prompt, fallback) {
+  const names = new Set();
+  const re = /(?:^|\n)\s*(?:E-[A-Za-z0-9_-]+\s*)?\[?(?:character|人物)\]?\s*[^\u4e00-\u9fa5A-Za-z]*([\u4e00-\u9fa5]{2,4})/g;
+  let m;
+  while ((m = re.exec(prompt)) && names.size < 8) names.add(m[1]);
+  for (const n of fallback) names.add(n);
+  if (!names.size) names.add("岑野舟");
+  return [...names];
+}
+const EXPAND_SENTENCES = [
+  "{name}把手里的东西攥紧了些，云海的光顺着指缝漏下去，在船板上碎成一地星屑。",
+  "风从舷侧擦过来，带着旧海水的咸味。{name}没有躲，只是把呼吸放慢了半拍。",
+  "「先走。」{name}只说了两个字，剩下的意思都压在肩膀上，像一根新加的缆。",
+  "船身轻轻一沉，又稳稳浮起来。{name}伸手按住船板，掌心传来龙骨深处的温热。",
+  "灯焰晃了一下。{name}抬眼去看，雾的深处似乎有什么东西，也在看他们。",
+  "这个道理不复杂：船在，人在；人在，路就在。{name}把它在心里又过了一遍。",
+  "远处的浪声一层压着一层，像谁在很深的地方翻动一本很旧的书。{name}听了一会儿，转身回了岗位。",
+  "「记住今天的航向。」{name}说，「往后有人问起，这一段是我们自己走出来的。」",
+  "星髓的微光在暗处明明灭灭，{name}借着这点光，把接下来三步的路在心里描了一遍。",
+  "没有人再多说话。跑船的人都懂：真正的决定落了地，声音反而会轻下去。",
+  "{name}检查了一遍系索，又检查了一遍。手上的活永远比嘴上的话可靠。",
+  "云海裂开一线，光落下来，正落在船首。{name}眯了眯眼——那道光指的方向，和罗盘指向的，是同一处。",
+  "「值更的看灯，掌舵的看浪。」{name}把这句老话念了一遍，像给全船校了一次准星。",
+  "潮气漫上甲板，{name}的睫毛上凝了细小的水珠。没有人去擦——擦了，还会再凝。",
+  "离目标还有一段水路。{name}知道，急不来；船速是海给的，节奏得自己稳住。",
+  "身后传来一声很轻的应答。{name}没有回头，但知道是谁——船上每个人的脚步声，船长都得认得。",
+];
+function expandToTarget(base, num, prompt) {
+  const target = parseTargetWords(prompt) || 2000;
+  const names = parseNames(prompt, ["岑野舟", "阿泊", "洛云雀", "半夏", "巴图"]);
+  const wc = (s) => s.replace(/\s+/g, "").length;
+  let out = base;
+  let i = 0;
+  const seed = num * 7;
+  while (wc(out) < target) {
+    const paragraph = [];
+    for (let j = 0; j < 4 && wc(out + paragraph.join("")) < target; j++) {
+      const tpl = EXPAND_SENTENCES[(seed + i * 3 + j * 5) % EXPAND_SENTENCES.length];
+      paragraph.push(tpl.replace(/\{name\}/g, names[(seed + i + j) % names.length]));
+    }
+    out += "\n\n" + paragraph.join("");
+    i++;
+    if (i > 200) break;
+  }
+  return out;
+}
+function proseForTarget(num, prompt) {
+  const base = readManuscript()[num] ?? CHAPTER_PROSE[num] ?? `第${num}章的夜比往常更沉。岑野舟守在舵位，把这一段航路的每一个浪口，又数了一遍。`;
+  return expandToTarget(base, num, prompt);
+}
+/** 补写请求（【续写要求】）：只返回新增段落，不复述前文。 */
+function continuationForTarget(num, prompt) {
+  const target = parseTargetWords(prompt) || 2000;
+  const names = parseNames(prompt, ["岑野舟", "阿泊", "洛云雀", "半夏", "巴图"]);
+  const wc = (s) => s.replace(/\s+/g, "").length;
+  const out = [];
+  let i = 0;
+  const seed = num * 11 + 3;
+  while (wc(out.join("\n\n")) < Math.max(400, target * 0.4)) {
+    const paragraph = [];
+    for (let j = 0; j < 4; j++) {
+      const tpl = EXPAND_SENTENCES[(seed + i * 5 + j * 3) % EXPAND_SENTENCES.length];
+      paragraph.push(tpl.replace(/\{name\}/g, names[(seed + i * 2 + j) % names.length]));
+    }
+    out.push(paragraph.join(""));
+    i++;
+    if (i > 100) break;
+  }
+  return out.join("\n\n");
+}
+
 const server = createServer((req, res) => {
   const cors = {
     "access-control-allow-origin": req.headers.origin ?? "*",
@@ -7809,7 +7915,7 @@ const server = createServer((req, res) => {
       if (phase === "prose") {
         const m = /第(\d+)章/.exec(prompt);
         const num = m ? Number(m[1]) : 0;
-        const text = CHAPTER_PROSE[num] ?? `【占位】第${num}章正文尚未由主笔撰写。`;
+        const text = proseForTarget(num, prompt);
         return sse(res, text);
       }
       const text = phase === "style" ? JSON.stringify(STYLE_ANALYSIS) : PROSE_FALLBACK;
@@ -7818,7 +7924,9 @@ const server = createServer((req, res) => {
     const response = RESPONSES[phase]
       ? RESPONSES[phase](prompt)
       : phase === "prose"
-        ? (CHAPTER_EXTRA[Number((/第(\d+)章/.exec(prompt) || [])[1] || 0)] ?? "")
+        ? (prompt.includes("【续写要求】")
+            ? continuationForTarget(Number((/第(\d+)章/.exec(prompt) || [])[1] || 0), prompt)
+            : proseForTarget(Number((/第(\d+)章/.exec(prompt) || [])[1] || 0), prompt))
         : { error: `未实现的阶段: ${phase}` };
     setTimeout(() => {
       res.writeHead(200, { "content-type": "application/json", ...cors });

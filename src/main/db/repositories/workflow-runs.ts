@@ -71,5 +71,13 @@ export function createWorkflowRunsRepository(client: Client) {
     return result.rows.map((row) => fromRow(row as DbRow));
   }
 
-  return { get, create, update, list };
+  /** AN-053：清空作品的运行索引（重放已封存周期前调用）。 */
+  async function clear(novelId: string): Promise<void> {
+    await client.execute({
+      sql: "DELETE FROM workflow_runs WHERE novel_id=?",
+      args: [novelId],
+    });
+  }
+
+  return { get, create, update, list, clear };
 }

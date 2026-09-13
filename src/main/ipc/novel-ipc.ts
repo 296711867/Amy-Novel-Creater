@@ -485,6 +485,9 @@ export function registerNovelIpc(
   ipc.handle(IPC_CHANNELS.listWorkflowRuns, (_event, novelId: string) =>
     database.listWorkflowRuns(novelId),
   );
+  ipc.handle(IPC_CHANNELS.clearWorkflowRuns, (_event, novelId: string) =>
+    database.clearWorkflowRuns(novelId),
+  );
   ipc.handle(
     IPC_CHANNELS.reviewPlanningProposal,
     (

@@ -157,6 +157,8 @@ export interface PlatformPort {
   createWorkflowRun(input: CreateWorkflowRunInput): Promise<WorkflowRun>;
   updateWorkflowRun(input: UpdateWorkflowRunInput): Promise<WorkflowRun>;
   listWorkflowRuns(novelId: string): Promise<WorkflowRun[]>;
+  /** AN-053：清空作品的运行索引（重放已封存周期前调用）；审计不受影响。 */
+  clearWorkflowRuns(novelId: string): Promise<void>;
   listChapters(novelId: string): Promise<Chapter[]>;
   getChapter(chapterId: string): Promise<Chapter | null>;
   saveChapter(input: SaveChapterInput): Promise<Chapter>;

@@ -232,6 +232,8 @@ export interface NovelState {
     accept: boolean,
   ): Promise<PlanningProposal>;
   loadWorkflowRuns(novelId: string): Promise<WorkflowRun[]>;
+  /** AN-053：清空作品的运行索引（重放已封存周期前调用）。 */
+  clearWorkflowRuns(novelId: string): Promise<void>;
   /**
    * startPhase：从指定规划阶段起步（AN-035）。第 2 周期起地基（圣经/
    * 人物/场景）已存在，直接从 structure 开始，避免每周期重复跑第 1–6 步
@@ -343,7 +345,7 @@ export interface NovelState {
    * 封存（门禁照跑）→ 下一周期，直到目标章数；报错/批次预算耗尽/
    * 质量门触发转为 paused 并记录原因，处理后可续跑；重启自动重挂载。
    */
-  startCruise(novelId: string, targetChapter: number): void;
+  startCruise(novelId: string, targetChapter: number): Promise<void>;
   stopCruise(novelId: string, message?: string): void;
   resumeCruise(novelId: string): Promise<void>;
   tickCruise(novelId: string): Promise<void>;
@@ -783,6 +785,15 @@ export const useNovelStore = create<NovelState>((set, get) => ({
     const runs = await platform.listWorkflowRuns(novelId);
     set({ workflowRuns: { ...get().workflowRuns, [novelId]: runs } });
     return runs;
+  },
+  /** AN-053：清空作品的运行索引（重放已封存周期前调用）。运行索引是
+   * 巡航的「当前进度」依据，重放时旧运行会让巡航误判进度并冲线；
+   * 批次/任务/事件审计不在此列。 */
+  async clearWorkflowRuns(novelId) {
+    await platform.clearWorkflowRuns(novelId);
+    set({
+      workflowRuns: { ...get().workflowRuns, [novelId]: [] },
+    });
   },
   async startWorkflowRun(novelId, mode, policy, startPhase) {
     let run = await platform.createWorkflowRun({

@@ -35,7 +35,10 @@ export async function resumeWorkflowRun(
   });
   // 曾在规划检查点（阶段/提案审核）暂停的运行恢复时必须重新走
   // prepareGeneration：提案可能新增，代签确认也可能尚未执行。
-  if (run.currentPhase === "generation" && !source.checkpoint)
+  // AN-046：批次尚未创建过的 generation 运行（如巡航复用已就绪策划包
+  // 直接从正文阶段启动）同样必须走 prepareGeneration——十步代签在那里
+  // 执行，跳过会导致 createGenerationDraft 被「未完成十步向导」门禁拒绝。
+  if (run.currentPhase === "generation" && source.batchId)
     return resumeGeneration(port, run);
 
   while (run.currentPhase !== "generation") {
@@ -152,6 +155,9 @@ async function resumeGeneration(
   let run = source;
   if (!run.batchId) {
     try {
+      // AN-051：本轮运行没有自己的批次时一律新建。重放已封存周期时若复用
+      // 旧的 completed 批次（任务全部终态、候选早已接受），本轮会「空转」：
+      // 不生成新稿、直接封存冲线。批次与运行是同生同死的绑定关系。
       const created = await port.createGenerationDraft(run.novelId, {
         ...run.config.generationPolicy,
         approvalGate: run.mode !== "autopilot",

@@ -82,7 +82,15 @@ function pauseCruise(novelId: string, message: string) {
 
 export function createCruiseActions(set: NovelStateSet, get: NovelStateGet) {
   return {
-  startCruise(novelId, targetChapter) {
+  async startCruise(novelId, targetChapter) {
+    // AN-053：重放场景清理。陈旧的已完成运行索引会让巡航把旧进度当现状
+    // （误冲线/复用旧批次）。运行索引不是正史数据——批次、候选、正史与
+    // 审计事件都不受影响。
+    try {
+      await get().clearWorkflowRuns(novelId);
+    } catch {
+      // 清理失败不阻断开启：巡航 tick 会以当前索引继续。
+    }
     const entry: CruiseState = {
       enabled: true,
       status: "active",
@@ -434,6 +442,49 @@ export function createCruiseActions(set: NovelStateSet, get: NovelStateGet) {
       const acceptedCount = rangeChapters.filter(
         (item) => item.status === "accepted",
       ).length;
+      // AN-047：重写场景盲区。章节状态可能仍是旧稿的 accepted——本批次
+      // 还有待审候选时不能视为周期完成，否则巡航会跳过等待直接封存冲线
+      // （线上形态：重放已封存周期，巡航连跑九周期收工，89 章新候选悬空）。
+      // 检查依据是候选状态而非任务状态：竞态下任务的 candidateId 可能
+      // 仍指向已接受的旧候选（AN-049），任务全部 completed 但新稿未入正史。
+      if (run.batchId) {
+        const batchJobs = await get().loadJobs(run.batchId);
+        const pendingNew: number[] = [];
+        for (const item of batchJobs) {
+          if (!item.chapterId) continue;
+          const all = await platform.listChapterCandidates(item.chapterId);
+          const newest = all[0];
+          if (newest?.status === "candidate") pendingNew.push(item.position);
+        }
+        // AN-052：等待窗口。本批次生成的新候选可能晚于上一次检查落库
+        // （生成中检查不到 → 检查完落库 → 封存直接冲线）。凡任务更新时间
+        // 晚于本轮运行启动的章节，其最新候选必须为 accepted 才算收尾。
+        const runStart = new Date(run.updatedAt).getTime();
+        for (const item of batchJobs) {
+          if (pendingNew.includes(item.position)) continue;
+          if (!item.chapterId) continue;
+          if (new Date(item.updatedAt).getTime() < runStart) continue;
+          const all = await platform.listChapterCandidates(item.chapterId);
+          const newest = all[0];
+          if (newest && newest.status !== "accepted")
+            pendingNew.push(item.position);
+        }
+        if (pendingNew.length) {
+          const auto = get().autoReview[novelId];
+          if (!auto?.enabled) {
+            pauseCruise(
+              novelId,
+              `本批次仍有待审候选（章节显示为旧稿已入正史），自动接受已停止（${auto?.message ?? "原因未知"}）。处理后续跑。`,
+            );
+            return;
+          }
+          noteCruise(
+            novelId,
+            `新稿入正史中：第 ${policy.startChapter}–${policy.endChapter} 章还有 ${pendingNew.length} 章候选待自动接受。`,
+          );
+          return;
+        }
+      }
       if (acceptedCount < rangeChapters.length) {
         const auto = get().autoReview[novelId];
         if (!auto?.enabled) {
@@ -476,6 +527,42 @@ export function createCruiseActions(set: NovelStateSet, get: NovelStateGet) {
           );
       } catch {
         // 清理失败不阻断封存（门禁仍会拦截 error 级数据问题）。
+      }
+      // AN-050：封存前消化本周期残留的正史建议。竞态下（AN-049 改指新稿
+      // 接受）较早候选的建议可能晚于「接受」动作产生，自动接受的第二步
+      // 已经跑过，封存门禁会因「仍有建议未处理」拒绝。巡航授权语义与
+      // 自动接受一致：这里的建议全部自动接受（单条失败不阻断，转人工）。
+      try {
+        let handled = 0;
+        // AN-050（修正）：封存门禁检查的是「该周期全部 accepted 候选」的
+        // pending 建议（含竞态中落选的旧候选），所以这里也要按同一口径遍历，
+        // 而不是只看批次任务当前指向的候选。
+        const candidatesByKey = new Map();
+        for (const ch of rangeChapters) {
+          const all = await platform.listChapterCandidates(ch.id);
+          for (const cand of all) {
+            if (cand.status !== "accepted") continue;
+            candidatesByKey.set(cand.id, cand);
+          }
+        }
+        for (const [candId] of candidatesByKey) {
+          const proposals = await platform.listFactProposals(candId);
+          const pending = proposals.filter((item) => item.status === "proposed");
+          for (const proposal of pending) {
+            try {
+              await get().reviewFactProposal(candId, proposal.id, true, {
+                autoCreateCharacter: true,
+              });
+              handled++;
+            } catch {
+              // 单条失败不阻断封存；门禁若因此拒绝，巡航会暂停并给出原因。
+            }
+          }
+        }
+        if (handled > 0)
+          noteCruise(novelId, `封存前自动处理 ${handled} 条正史建议。`);
+      } catch {
+        // 汇总失败不阻断；封存门禁仍会给出可读原因。
       }
       // AN-027 封存门禁：全局校验 error 阻断。悬空状态引用属于孤儿垃圾数据
       // （指向不存在的实体，无人能读到），巡航自动清理后复查（线上形态：

@@ -240,6 +240,9 @@ export class NovelDatabase {
   listWorkflowRuns(novelId: string) {
     return this.workflowRuns.list(novelId);
   }
+  async clearWorkflowRuns(novelId: string) {
+    await this.workflowRuns.clear(novelId);
+  }
   async savePlanningCycle(input: SavePlanningCycleInput) {
     if (input.status === "completed") {
       const chapters = (await this.listChapters(input.novelId)).filter(

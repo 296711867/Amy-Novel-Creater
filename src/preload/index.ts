@@ -127,6 +127,8 @@ const api: AmyNovelApi = {
     ipcRenderer.invoke(IPC_CHANNELS.updateWorkflowRun, input),
   listWorkflowRuns: (novelId: string) =>
     ipcRenderer.invoke(IPC_CHANNELS.listWorkflowRuns, novelId),
+  clearWorkflowRuns: (novelId: string) =>
+    ipcRenderer.invoke(IPC_CHANNELS.clearWorkflowRuns, novelId),
   listChapters: (novelId: string) =>
     ipcRenderer.invoke(IPC_CHANNELS.listChapters, novelId),
   getChapter: (chapterId: string) =>

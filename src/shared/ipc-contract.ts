@@ -27,6 +27,7 @@ export const IPC_CHANNELS = {
   createWorkflowRun: "workflow:runs:create",
   updateWorkflowRun: "workflow:runs:update",
   listWorkflowRuns: "workflow:runs:list",
+  clearWorkflowRuns: "workflow:runs:clear",
   listChapters: "chapters:list",
   getChapter: "chapters:get",
   saveChapter: "chapters:save",

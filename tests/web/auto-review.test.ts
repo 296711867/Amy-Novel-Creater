@@ -219,6 +219,7 @@ const backend = vi.hoisted(() => {
       saveStoryEntity: [] as unknown[],
       saveCharacterState: [] as unknown[],
       acceptChapterCandidate: [] as string[],
+      updateGenerationJob: [] as Array<{ id: string; status: string; patch?: Record<string, unknown> }>,
       acceptAttempts: [] as string[],
       appendGenerationEvent: [] as string[],
     },
@@ -241,6 +242,15 @@ vi.mock("@renderer/platform/web-platform", () => ({
       Promise.resolve(
         backend.candidates.filter((item) => item.chapterId === chapterId),
       ),
+    updateGenerationJob: (id: string, status: string, patch: Record<string, unknown> = {}) => {
+      backend.calls.updateGenerationJob.push({ id, status, patch });
+      const job = backend.jobs.find((value) => value.id === id);
+      if (job) {
+        job.status = status as never;
+        Object.assign(job, patch);
+      }
+      return Promise.resolve(job);
+    },
     acceptChapterCandidate: (id: string) => {
       backend.calls.acceptAttempts.push(id);
       if (backend.failAccept)
@@ -727,6 +737,44 @@ describe("自动审阅（AN-026）", () => {
     expect(store.getState().autoReview["n1"]?.message).toContain(
       "正在生成章节正文",
     );
+  });
+
+  it("AN-049：重写场景任务指向旧候选时，自动接受改指最新候选并接受新稿", async () => {
+    // 场景：章节旧稿已被接受（任务 candidateId 指旧候选 cd-old），
+    // 重写产出了更新的 candidate 状态新稿 cd-new。自动接受必须改指新稿。
+    backend.jobs[0].status = "candidate_ready";
+    backend.jobs[0].candidateId = "cd-old";
+    backend.candidates.unshift({
+      id: "cd-new",
+      novelId: "n1",
+      chapterId: "c1",
+      profileId: "p1",
+      contextHash: "h",
+      content: "重写后的新稿正文，长度达标。",
+      wordCount: 2000,
+      status: "candidate",
+      inputTokens: 1,
+      outputTokens: 1,
+      cachedTokens: 0,
+      createdAt: "2026-09-13T00:00:00.000Z",
+      updatedAt: "2026-09-13T00:00:00.000Z",
+    });
+    backend.candidates.find((item) => item.id === "cd1")!.createdAt =
+      "2026-08-01T00:00:00.000Z";
+    enableAuto();
+    await store.getState().tickAutoReview("n1");
+    // 先改指新稿（updateGenerationJob 带新 candidateId），再接受新稿
+    const repoint = backend.calls.updateGenerationJob.find(
+      (call: { id: string; status: string; patch?: { candidateId?: string } }) =>
+        call.patch?.candidateId === "cd-new",
+    );
+    expect(repoint).toBeTruthy();
+    expect(backend.calls.acceptChapterCandidate).toContain("cd-new");
+    expect(backend.calls.acceptChapterCandidate).not.toContain("cd-old");
+    backend.candidates = backend.candidates.filter(
+      (item) => item.id !== "cd-new",
+    );
+    backend.jobs[0].candidateId = "cd1";
   });
 
   it("AN-028 持久化：开关写入 localStorage，刷新/重启后可断点续跑", () => {

@@ -156,15 +156,39 @@ export function createAutoReviewActions(set: NovelStateSet, get: NovelStateGet) 
       // 以数据库为准（缓存可能停留在旧状态）：线上形态为缓存说“待审”、
       // 实际已接受 → 反复 accept 被“already reviewed”拒绝，连续失败自停，
       // 与巡航的重拉形成互搏死循环。
+      // AN-049：重写场景下任务可能指向上一轮已接受的旧候选，而本章已有
+      // 更新的 candidate 待审。改指最新候选，否则会反复“接受旧稿”，
+      // 新稿永远入不了正史（线上形态：42–50 章新候选全部悬空）。
+      let jobForCandidate = ready;
+      if (ready?.candidateId) {
+        const allCandidates = await platform.listChapterCandidates(
+          ready.chapterId,
+        );
+        const newest = allCandidates[0];
+        if (
+          newest &&
+          newest.id !== ready.candidateId &&
+          newest.status === "candidate" &&
+          newest.createdAt >=
+            (allCandidates.find((item) => item.id === ready.candidateId)
+              ?.createdAt ?? "")
+        ) {
+          await platform.updateGenerationJob(ready.id, ready.status, {
+            candidateId: newest.id,
+          });
+          jobForCandidate = { ...ready, candidateId: newest.id };
+        }
+      }
       const candidate =
-        ready?.candidateId === null || ready?.candidateId === undefined
+        jobForCandidate?.candidateId === null ||
+        jobForCandidate?.candidateId === undefined
           ? null
           : ((
-              await platform.listChapterCandidates(ready.chapterId)
-            ).find((item) => item.id === ready.candidateId) ??
-              Object.values(get().candidates)
-                .flat()
-                .find((item) => item.id === ready.candidateId));
+              await platform.listChapterCandidates(jobForCandidate.chapterId)
+            ).find((item) => item.id === jobForCandidate.candidateId) ??
+            Object.values(get().candidates)
+              .flat()
+              .find((item) => item.id === jobForCandidate.candidateId));
       if (candidate?.status === "candidate") {
         // 质量安全门（AUTOPILOT_WORKFLOW.md §6）：存在未解决的 error 级检查
         // 问题时不得自动接受，交还作者人工处理。
