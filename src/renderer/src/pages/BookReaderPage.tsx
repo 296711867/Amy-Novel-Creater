@@ -202,7 +202,19 @@ export function BookReaderPage(): React.JSX.Element {
       <div className="book-layout">
         <aside className="book-toc">
           {accepted.map((chapter) => (
-            <a key={chapter.id} href={`#book-ch-${chapter.position}`}>
+            // AN-055：应用是 HashRouter，裸锚点 href="#book-ch-N" 会被当成
+            // 路由解析，匹配不到任何页面 → 通配路由跳回首页（线上形态：
+            // 连读页点目录章节直接回首页）。改为 preventDefault + 滚动定位。
+            <a
+              key={chapter.id}
+              href={`#book-ch-${chapter.position}`}
+              onClick={(event) => {
+                event.preventDefault();
+                document
+                  .getElementById(`book-ch-${chapter.position}`)
+                  ?.scrollIntoView({ behavior: "smooth", block: "start" });
+              }}
+            >
               <b>
                 {chapter.position}. {chapter.title}
               </b>
