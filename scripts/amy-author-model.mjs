@@ -7578,14 +7578,155 @@ function chapterNumberByProse(content) {
   return 0;
 }
 
+
+// ─── 新书《灯匠与雾海》：完全独立于《泊星港》的新项目数据 ─────────────────
+const NEW_BOOK_BIBLE = {
+  sections: [
+    { kind: "intent", content: "「灯是记忆，雾是遗忘」：守灯人少女用一盏不灭的灯在吞人雾海里打捞沉没城镇的真相。爽点三件套：灯语解谜、镇魂契约升级、沉镇地图逐步点亮；情感主轴是「找回家的路」与「替遗忘者记得」。" },
+    { kind: "world", content: "【雾海】百年前一夜之间，大海变成了会呼吸的浓雾，雾里沉睡着九十九座城镇，雾退时露出的礁石上能捡到「门牌」。【守灯人】唯一能在雾中不迷失的职业，靠心头一点「不灭的火」点灯引路，火以记忆为燃料——记住的越多，灯越亮，也越容易被雾盯上。【灯语】灯的明灭节奏可以传讯，全雾海通用的只有九个基本灯码。【镇魂契】与沉镇门牌缔约，可短暂唤醒镇中一物一事之力，契有层级：一牌一契，九十九契可点一镇之灯。 【代价：灯枯】忘却一段重要记忆，灯会骤亮后转暗；彻底遗忘自己的人，灯灭，人成为雾的一部分。" },
+    { kind: "style", content: "第三人称限知（跟随苏小灯）；描写以嗅觉与触觉开场，再用灯光切开画面；对话短促、口语化，重要信息藏在灯码明灭里；每章一个沉镇线索加一次心跳时刻，章末必留钩子；抒情段落不超过三行，情绪落在物件上（门牌、灯芯、旧钥匙）。" },
+    { kind: "boundaries", content: "1. 不恐怖化：雾中沉镇是哀伤而非惊悚，不写Jump Scare。2. 不写未成年恋爱线。3. 记忆代价必须始终有效，不许无代价恢复记忆。4. 不使用克苏鲁专有名词。5. 反派雾议会不得写成纯粹邪恶，其立场是「防止灯塔引来第二次雾潮」。6. 灯码只有九个基本码，不许随意发明新码。7. 主角第一卷结束前不得点燃超过三座镇灯。" },
+  ],
+  characters: [
+    { type: "character", name: "苏小灯", summary: "16 岁守灯人学徒，灯是母亲留下的遗物", aliases: ["小灯"], profile: { 身份: "守灯人学徒", 目标: "点亮第九十九座镇灯，找回雾海彼岸的家", 秘密: "她的不灭之火其实烧的是母亲最后一段记忆", 语言习惯: "紧张时数灯码（一短两长）" } },
+    { type: "character", name: "陆沉舟", summary: "中年摆渡人，雾海活地图，收费古怪", aliases: ["老陆"], profile: { 身份: "摆渡人", 目标: "找到雾议会档案室，销毁自己的「退役令」", 秘密: "曾是雾议会点灯官，亲手熄过一座镇灯" } },
+    { type: "character", name: "阿窑", summary: "沉镇陶窑醒来的窑童人偶，只认门牌", aliases: [], profile: { 身份: "镇魂契·窑镇一物", 目标: "凑齐碎瓷拼出窑镇全图", 秘密: "窑底压着雾潮第一夜的真相" } },
+  ],
+  entities: [
+    { type: "location", name: "灯岬", summary: "雾海边最后的定居点，守灯人公会所在地" , aliases: [] },
+    { type: "organization", name: "雾议会", summary: "管理入雾许可与灯号配给的管理机构", aliases: [] },
+    { type: "item", name: "不灭的灯", summary: "苏小灯的母亲遗留的黄铜提灯，火以记忆为燃料", aliases: [] },
+    { type: "term", name: "镇魂契", summary: "与沉镇门牌缔约、短暂唤醒镇中之力的契约体系", aliases: [] },
+  ],
+};
+const NEW_BOOK_CAST = {
+  characters: [
+    { type: "character", name: "苏小灯", summary: "16 岁守灯人学徒", aliases: ["小灯"], tier: "protagonist", profile: { 身份: "守灯人学徒", 性格: "外柔内韧，方向感极差但从不迷路", 目标: "点亮九十九座镇灯回家", 恐惧: "忘记母亲的脸", 缺陷: "过度共情，见门牌就想救", 秘密: "不灭之火烧的是母亲的记忆", 语言习惯: "紧张数灯码" } },
+    { type: "character", name: "陆沉舟", summary: "中年摆渡人", aliases: ["老陆"], tier: "support", profile: { 身份: "摆渡人", 性格: "嘴硬心软，账算得极清", 目标: "销毁自己的退役令", 恐惧: "再亲手熄一盏镇灯", 缺陷: "用交易掩饰愧疚", 秘密: "前雾议会点灯官", 语言习惯: "先报价再讲理" } },
+    { type: "character", name: "白砚", summary: "雾议会档案员", aliases: [], tier: "support", profile: { 身份: "档案员", 性格: "规则至上但偷偷破例", 目标: "查清百盏镇灯熄灭的官方记录", 恐惧: "档案被雾蚀", 缺陷: "过信文书，不信活人", 秘密: "自己是初代守灯人后裔", 语言习惯: "引用条目编号" } },
+    { type: "character", name: "阿窑", summary: "窑镇童偶", aliases: [], tier: "recurring", profile: { 出现条件: "持窑镇门牌入窑镇", 性格标签: "碎瓷拼图狂热者" } },
+    { type: "character", name: "费照", summary: "雾议会点灯官", aliases: [], tier: "support", profile: { 身份: "现役点灯官", 性格: "信仰秩序，视私点镇灯为灾祸之源", 目标: "阻止第二次雾潮", 恐惧: "重演百年前一夜百灯俱熄", 缺陷: "手段越界", 秘密: "保存着陆沉舟的退役令原件", 语言习惯: "灯语比说话流利" } },
+  ],
+  extras: ["窑匠老魏", "灯岬粥摊阿婆", "雾汛播报员", "旧货商潘三"],
+};
+const NEW_BOOK_SCENES = {
+  // 注意：schema 是 entityRef: z.string().optional()——省略即可，不能写 null
+  // （zod 的 optional 不接受 null，曾致 scenes 阶段解析失败触发误修复）。
+  scenes: [
+    { name: "灯岬码头", aliases: [], summary: "雾海边最后的人工码头，入雾与归航都在这里", purpose: "出发与归航的仪式感", mood: "咸雾、灯油、旧木头味", visualAnchors: ["生锈的雾警钟", "刻满名字的系缆桩", "永远排队的粥摊"], residents: "守灯人公会值班员", dangerLevel: "低" },
+    { name: "雾道", aliases: [], summary: "雾中依稀可辨的旧航道，靠灯码导航", purpose: "冒险与遭遇的主舞台", mood: "看不清十步外的白，声音传得很远", visualAnchors: ["漂浮的门牌", "半淹的路标鸟", "灯语的回音"], residents: "无", dangerLevel: "高" },
+    { name: "窑镇", aliases: [], summary: "沉镇之一，以陶窑闻名，雾中仅露窑顶", purpose: "第一个解谜副本", mood: "细雨般的湿灰、凉透的陶土", visualAnchors: ["九十九级下沉台阶", "窑口的幽蓝磷火", "拼不完的碎瓷墙"], residents: "阿窑", dangerLevel: "中" },
+    { name: "守灯人公会", aliases: [], summary: "灯岬的灯号登记与配给机构", purpose: "接单、升级、情报", mood: "墨水、铜灯、熬夜的值班员", visualAnchors: ["百格灯号柜", "退色的镇灯图", "打瞌睡的猫"], residents: "白砚（借驻）", dangerLevel: "低" },
+  ],
+  entities: [
+    { type: "organization", name: "雾议会", summary: "灯号配给与入雾许可的管理机构，立场是防止第二次雾潮", aliases: [], profile: {} },
+    { type: "item", name: "门牌", summary: "沉镇名物的引路牌，镇魂契的缔约媒介", aliases: [], profile: {} },
+  ],
+};
+function isNewBook(prompt) {
+  return /灯匠|雾海|苏小灯/.test(prompt);
+}
+const NEW_BRIEF_DRAFT = {
+  audience: "14-35 岁男女通吃的治愈冒险读者；喜欢解谜、地图点亮与轻奇幻设定；夜读为主，追更动力是「下一座镇的故事」。",
+  style: "第三人称限知（跟随苏小灯）；嗅觉触觉开场、灯光切画面；对话短促口语化；每章一个沉镇线索加一次心跳时刻，章末必留钩子。",
+  boundaries: "不恐怖化（哀伤而非惊悚）；不写未成年恋爱；记忆代价永远有效；不用克苏鲁专有名词。",
+  sellingPoint: "在吞人雾海里，守灯人少女用烧着自己记忆的灯，一座座点亮沉没的城镇，找回回家的路。",
+  conflict: "苏小灯与雾议会点灯官费照在「点灯救人」与「防止第二次雾潮」上正面冲突；暗线是百年前一夜百灯俱熄的真相。",
+  protagonistGoal: "点亮九十九座镇灯、找回雾海彼岸的家；失败则母亲最后的记忆烧尽、她本人随灯而灭。",
+  ending: "第九十九盏灯点亮时雾海退去一半，真相是初代守灯人自愿化雾镇海；小灯选择保留一盏不点，替所有被遗忘者记得。",
+};
+
+
+const NEW_BOOK_PERSONA = {
+  recommendations: [
+    { name: "苏小灯", personaType: "ISFJ · 守夜的点灯人", reason: "以记忆为灯油的守灯人学徒：共情驱动冒险，替遗忘者记得是她的执念，也是全书情感锚。", writingConstraints: "对话轻声但立场硬；遇门牌必停步；决策先想「妈妈会怎么做」；提到母亲记忆细节时写迟疑而非落泪。", speechHabit: "紧张时低声数灯码（一短两长）；口头禅「灯还亮着」。" },
+    { name: "陆沉舟", personaType: "ISTP · 报价单上的义人", reason: "雾海活地图，用交易语法包裹愧疚；他对退役令的执念承担「体制内个体责任」的辩论线。", writingConstraints: "先报价再讲理；救人也记账；危险时先稳船再救人；任何「点灯官」称呼都让他沉默半拍。", speechHabit: "以物易物的口头报价；爱说「雾里没有白跑的腿」。" },
+    { name: "白砚", personaType: "INTJ · 档案里的破例者", reason: "规则至上的档案员用条目对抗雾蚀，负责解谜线；她是「真相是否值得公开」的天平。", writingConstraints: "引用条目编号后再说观点；不信口述史；破例时先注明「本条为例外」；关键证据会手抄两份。", speechHabit: "说话像读目录：「编号、日期、内容、备注」。" },
+    { name: "费照", personaType: "ENTJ · 灯塔的守夜官", reason: "信仰秩序的点灯官，立场是防止第二次雾潮；他不是反派，是另一种守护方式。", writingConstraints: "灯语比说话流利；下达指令必附撤离路线；写他时先给正当理由再给手段；绝不嘲讽对方理想。", speechHabit: "用灯码节拍强调重点；口头禅「灯号即秩序」。" },
+  ],
+};
+
+// 新书《灯匠与雾海》的周期策划包生成器：按范围生成 10 章卷章结构。
+function newBookStructure(start, end) {
+  const cycleNo = Math.floor((start - 1) / 10) + 1;
+  // 12 个周期 = 12 条弧线，一章一题、全书 120 个标题互不重复
+  // （周期 11/12 若 clamp 复用周期 10 的标题，〔章题〕段首标签会全书撞车）。
+  const goals = [
+    { goal: "小灯接下第一份入雾委托，在窑镇点亮第一盏镇灯，结识阿窑", climax: "窑口磷火将熄时以母亲记忆续灯" },
+    { goal: "雾道深处的水塔镇与雾议会档案室的第一次交锋", climax: "档案室灯下对峙：费照出示退役令复印件" },
+    { goal: "沉镇的「回声」现象被发现——沉镇记得死者最后的话", climax: "小灯听见母亲的声音碎片，灯骤亮惊雾" },
+    { goal: "钟镇报时人事件：一座镇灯被人为熄灭的旧案重查", climax: "陆沉舟承认当年执行过熄灯令" },
+    { goal: "灯岬公会的百年档案与第一次雾潮的官方版本出现裂缝", climax: "白砚发现百灯俱熄夜档案被替换" },
+    { goal: "远航灯塔群：寻找初代守灯人的航行日志", climax: "日志最后一页写着小灯母亲的名字" },
+    { goal: "雾议会分裂：点灯官费照被停职，私放灯号给船团", climax: "档案室大火，白砚抢出半箱原件" },
+    { goal: "第九十九座镇灯的传说与「不点的灯」的真意", climax: "初代守灯人自愿化雾的真相浮出" },
+    { goal: "第二次雾潮前兆出现，议会急令熄灭所有镇灯", climax: "小灯用九十九盏灯的回声反证真相" },
+    { goal: "真相公开后的灯岬：撤离与坚守分裂，追查第二次雾潮的真正成因", climax: "化雾者遗言指明雾心方位，撤离夜灯岬自守" },
+    { goal: "第二次雾潮决战：灯的船团入雾远征，以灯语接力护住航路", climax: "风眼里九十九盏灯齐明，雾海裂开一线" },
+    { goal: "终章：雾海退去一半，沉镇重见天日，小灯选择保留一盏不点", climax: "替所有被遗忘者记得——灯还亮着" },
+  ];
+  const g = goals[Math.min(cycleNo - 1, goals.length - 1)];
+  const titles = [
+    ["第一盏灯", "粥摊的委托", "雾道三里", "门牌会说谎", "窑镇的台阶", "磷火", "碎瓷墙", "阿窑的图", "灯枯一瞬", "窑顶的光"],
+    ["水塔的声音", "白砚的条目", "档案室", "退役令", "雾中茶会", "抄两份", "灯号即秩序", "费照的撤离路线", "被替换的一页", "夜航灯"],
+    ["回声规则", "死者的话", "母亲的声音", "骤亮", "雾在听", "记忆的重量", "阿窑开口", "钟镇的哑钟", "报时人", "第一次心跳"],
+    ["旧案重开", "熄灯令原件", "陆沉舟的沉默", "钟锤与灯芯", "两份口供", "听证会", "灯证", "雾议会的道歉", "点亮的程序", "钟声重新响起"],
+    ["百年档案", "裂缝", "抄本与原件", "白砚的怀疑", "条目0001", "初代名单", "守灯人谱系", "谱系缺口", "小灯家的名字", "档案室的灯"],
+    ["远航准备", "灯塔群", "第七座塔", "航行日志", "褪色墨水", "坐标之谜", "日志主人", "母亲的名字", "最后一页", "回航"],
+    ["停职令", "私放灯号", "追捕与放行", "档案室大火", "半箱原件", "抢救的代价", "白砚的破例", "议会分裂", "两派灯号", "新的秩序"],
+    ["第九十九座", "不点的灯", "传说的版本", "初代的抉择", "化雾者", "自愿的证据", "真相的形状", "告诉谁", "如何记得", "灯的真意"],
+    ["前兆", "议会急令", "熄灯动员", "拒绝执行", "九十九盏的回声", "反证", "听证与对峙", "雾潮的原理", "守灯人的立场", "风眼里的灯"],
+    ["撤离令", "留下的人", "灯岬之夜", "两条路线", "旧账本", "退潮的滩涂", "雾心的方向", "化雾者的遗言", "第九十九盏的名单", "决战前夜"],
+    ["远征准备", "灯的船队", "雾墙", "第一盏引灯", "灯语接力", "雾中的沉镇", "母亲的坐标", "风眼", "九十九盏齐明", "雾海裂开"],
+    ["退去一半", "新的海岸线", "归还的门牌", "沉镇的清晨", "阿窑的告别", "陆沉舟的新账本", "白砚的编目", "费照的巡灯线", "保留的一盏", "灯还亮着"],
+  ];
+  const cyc = titles[Math.min(cycleNo - 1, titles.length - 1)];
+  // 章节卷名必须能对上 volumes 列表（normalizeVolumeTitle 剥掉（N-N章）
+  // 后比对）——卷名从这里取，保证与下方 volumes 一一对应。
+  const volNames = ["卷一·灯记1", "卷二·灯记2-3", "卷三·灯记4-6", "卷四·灯记7-10"];
+  const volName = volNames[cycleNo <= 1 ? 0 : cycleNo <= 3 ? 1 : cycleNo <= 6 ? 2 : 3];
+  const chapters = [];
+  for (let i = 0; i < end - start + 1; i++) {
+    const pos = start + i;
+    const localIdx = pos - 1 - (cycleNo - 1) * 10;
+    const stage = localIdx % 10 < 3 ? "开场：委托与入雾" : localIdx % 10 < 7 ? "推进：解谜与冲突" : "收束：点亮与钩子";
+    chapters.push({
+      position: pos,
+      volumeTitle: volName,
+      title: "第" + pos + "章 " + (cyc[localIdx] ?? cyc[i % 10] ?? "灯语"),
+      outline: stage + "。" + g.goal + "。本章围绕「" + (cyc[localIdx] ?? "灯语") + "」展开：苏小灯在雾中使用灯码导航，陆沉舟提供摆渡经验，冲突来自雾议会规则或雾中危险；结尾留钩子指向" + (cyc[(localIdx + 1) % 10] ?? "下一周期") + "。",
+      viewpoint: "苏小灯",
+      characters: ["苏小灯", "陆沉舟"],
+      scenes: ["灯岬", "雾道"],
+      items: ["不灭的灯"],
+      skills: [],
+    });
+  }
+  return {
+    volumes: [
+      { title: "卷一·灯记1（1-10章）", outline: "入雾与第一盏灯：建立灯岬—雾道—窑镇的三角舞台" },
+      { title: "卷二·灯记2-3（11-30章）", outline: "档案与回声：雾议会线和沉镇回声线双线并进" },
+      { title: "卷三·灯记4-6（31-60章）", outline: "旧案与谱系：官方版本崩塌，守灯人谱系缺口指向小灯家" },
+      { title: "卷四·灯记7-10（61-120章）", outline: "真相与抉择：议会分裂、第二次雾潮前兆、终章点灯" },
+    ],
+    cycle: {
+      goal: g.goal,
+      openingState: "灯岬的日常或上一周期的余波",
+      climax: g.climax,
+      expectedClosingState: "一座镇灯点亮或一条真相落地，钩子未解",
+    },
+    chapters,
+    proposals: [],
+  };
+}
 const RESPONSES = {
   style: () => STYLE_ANALYSIS,
-  brief: () => BRIEF_DRAFT,
+  brief: (prompt) => (isNewBook(prompt) ? NEW_BRIEF_DRAFT : BRIEF_DRAFT),
   advisory: () => ADVISORY,
-  persona: () => PERSONA,
-  bible: () => BIBLE,
-  cast: () => CAST,
-  scenes: () => SCENES,
+  persona: (prompt) => (isNewBook(prompt) ? NEW_BOOK_PERSONA : PERSONA),
+  bible: (prompt) => (isNewBook(prompt) ? NEW_BOOK_BIBLE : BIBLE),
+  cast: (prompt) => (isNewBook(prompt) ? NEW_BOOK_CAST : CAST),
+  scenes: (prompt) => (isNewBook(prompt) ? NEW_BOOK_SCENES : SCENES),
   facts: (prompt) => {
     // 软件的事实提取提示词只带正文不带章号（"正文：\n{{content}}"），
     // 所以先按章号、再按正文开头反查章号，否则永远返回空提案。
@@ -7596,6 +7737,11 @@ const RESPONSES = {
   },
   review: () => REVIEW_EMPTY,
   structure: (prompt) => {
+    if (isNewBook(prompt)) {
+      const range = /只规划第\s*(\d+)–(\d+)\s*章/.exec(prompt);
+      const s = range ? Number(range[1]) : 1, e = range ? Number(range[2]) : s + 9;
+      return newBookStructure(s, e);
+    }
     const range = /只规划第\s*(\d+)–(\d+)\s*章/.exec(prompt);
     const start = range ? Number(range[1]) : 1;
     const end = range ? Number(range[2]) : start + 9;
@@ -7817,7 +7963,9 @@ function parseTargetWords(prompt) {
   return m ? Number(m[1]) : 0;
 }
 function parseOutline(prompt) {
-  const m = /章纲[：:]\s*([^\n]+)/.exec(prompt);
+  // 软件 Context Pack 的实际标签是「章节大纲：」（context-pack.ts），历史版本
+  // 曾用「大纲：」；三者都认，否则章纲驱动扩写永远拿不到要点。
+  const m = /(?:章节大纲|章纲|大纲)[：:]\s*([^\n]+)/.exec(prompt);
   return m ? m[1].trim() : "";
 }
 function parseNames(prompt, fallback) {
@@ -7826,67 +7974,153 @@ function parseNames(prompt, fallback) {
   let m;
   while ((m = re.exec(prompt)) && names.size < 8) names.add(m[1]);
   for (const n of fallback) names.add(n);
-  if (!names.size) names.add("岑野舟");
+  if (!names.size) names.add(fallback[0] ?? "岑野舟");
   return [...names];
 }
-const EXPAND_SENTENCES = [
-  "{name}把手里的东西攥紧了些，云海的光顺着指缝漏下去，在船板上碎成一地星屑。",
-  "风从舷侧擦过来，带着旧海水的咸味。{name}没有躲，只是把呼吸放慢了半拍。",
-  "「先走。」{name}只说了两个字，剩下的意思都压在肩膀上，像一根新加的缆。",
-  "船身轻轻一沉，又稳稳浮起来。{name}伸手按住船板，掌心传来龙骨深处的温热。",
-  "灯焰晃了一下。{name}抬眼去看，雾的深处似乎有什么东西，也在看他们。",
-  "这个道理不复杂：船在，人在；人在，路就在。{name}把它在心里又过了一遍。",
-  "远处的浪声一层压着一层，像谁在很深的地方翻动一本很旧的书。{name}听了一会儿，转身回了岗位。",
-  "「记住今天的航向。」{name}说，「往后有人问起，这一段是我们自己走出来的。」",
-  "星髓的微光在暗处明明灭灭，{name}借着这点光，把接下来三步的路在心里描了一遍。",
-  "没有人再多说话。跑船的人都懂：真正的决定落了地，声音反而会轻下去。",
-  "{name}检查了一遍系索，又检查了一遍。手上的活永远比嘴上的话可靠。",
-  "云海裂开一线，光落下来，正落在船首。{name}眯了眯眼——那道光指的方向，和罗盘指向的，是同一处。",
-  "「值更的看灯，掌舵的看浪。」{name}把这句老话念了一遍，像给全船校了一次准星。",
-  "潮气漫上甲板，{name}的睫毛上凝了细小的水珠。没有人去擦——擦了，还会再凝。",
-  "离目标还有一段水路。{name}知道，急不来；船速是海给的，节奏得自己稳住。",
-  "身后传来一声很轻的应答。{name}没有回头，但知道是谁——船上每个人的脚步声，船长都得认得。",
+// ─── 章纲驱动的确定性扩写（AN-057：消除模板句重复）──────────────────────
+// 旧实现的 16 句模板按固定索引轮换，长章里同一句反复出现（线上形态：第 40–120
+// 章大段复读）。改为「章纲要素展开」：把章纲拆成事件要点，每个要点从不同
+// 侧面（动作、对话、环境、内心、后果）独立成段——不同章不同段，同章不复读。
+function splitOutlinePoints(outline) {
+  return outline
+    .split(/[。；;！!？?]/)
+    .map((s) => s.trim())
+    .filter((s) => s.length >= 6);
+}
+function outlineFacts(prompt) {
+  const outline = parseOutline(prompt);
+  const pts = splitOutlinePoints(outline);
+  // 按书选料：新书的扩写素材（人名/侧面/阶段要点）与《泊星港》完全隔离，
+  // 防止旧书人物与航海意象渗进《灯匠与雾海》的正文。
+  const isNew = isNewBook(prompt);
+  const names = parseNames(prompt, isNew ? NEW_BOOK_NAMES : ["岑野舟", "阿泊", "洛云雀", "半夏", "巴图", "聂镇川"]);
+  const aspects = isNew ? NEW_ASPECTS : ASPECTS;
+  const phasePts = isNew ? NEW_PHASE_PTS : PHASE_PTS;
+  const extras = [];
+  const vm = /视角[：:]\s*([^\s，。]{2,6})/.exec(prompt);
+  if (vm) extras.push(vm[1]);
+  for (const s of [...prompt.matchAll(/(?:场景|地点)[：:]\s*([^\s，。\n]{2,8})/g)].slice(0, 4)) extras.push(s[1]);
+  for (const s of [...prompt.matchAll(/(?:道具|物品)[：:]\s*([^\s，。\n]{2,8})/g)].slice(0, 4)) extras.push(s[1]);
+  return { isNew, pts, extras, names, aspects, phasePts };
+}
+/** 五种展开侧面：内容（章纲要点）不同，措辞模式循环但段落事实不重复。 */
+const ASPECTS = [
+  (pt, name) => pt + "。" + name + "盯着眼前的变化，把手里能用的家伙又检查了一遍——船上的规矩：事到临头，先确认自己的手还听使唤。",
+  (pt, name) => "「" + pt + "。」" + name + "把这件事说得很短，短到像海图上的一个标记点；但每个人都听懂了标记点下面藏着的水深。",
+  (pt, name) => "云海的光在这时候换了个角度。" + pt + "——" + name + "借着光影的交界看过去，那件事的轮廓比刚才清楚了一分，也危险了一分。",
+  (pt, name) => name + "心里清楚：" + pt + "。这不是能靠运气绕过去的坎，但也不是不能拆的墙——只是得找到第一块松动的砖。",
+  (pt, name) => "后来回想，" + pt + "这件事真正的分量不在当下，而在它推倒的第一块骨牌。" + name + "此刻只来得及做最要紧的一件事：把船稳住。",
 ];
+function renderAspect(facts, index, pt, tag) {
+  const name = facts.names[index % facts.names.length];
+  const eye = facts.isNew ? "她的眼睛。" : "他的眼睛。";
+  const extra = facts.extras.length ? " " + facts.extras[index % facts.extras.length] + "的细节也没有逃过" + eye : "";
+  return tag + facts.aspects[index % facts.aspects.length](pt, name) + extra;
+}
+const PHASE_PTS = [
+  "等待有了结果，消息传到甲板上",
+  "船团各就各位，各自的事各自扛",
+  "变化的余波推开，牵出新的问题",
+  "有人拿定了主意，也有人还悬着心",
+  "新的线索浮上来，指向下一段航路",
+  "旧账翻过一页，船头压向新的水道",
+  "风浪退了半分，所有人抓紧换气的空当",
+  "夜色沉下来，值更的人接管了甲板",
+];
+// ─── 新书《灯匠与雾海》扩写素材（与上组完全隔离）────────────────────────
+const NEW_BOOK_NAMES = ["苏小灯", "陆沉舟", "白砚", "阿窑", "费照"];
+/** 同样五种侧面，但意象换成灯/雾/门牌；pt 仍是章纲要点。 */
+const NEW_ASPECTS = [
+  (pt, name) => pt + "。" + name + "把黄铜灯往胸前收了收——守灯人的规矩：事到临头，先理灯，灯理好了人事才有得谈。",
+  (pt, name) => "「" + pt + "。」" + name + "把这件事说得很短，短到像灯码里的一短；但雾里所有人都听出了那一长落在哪里。",
+  (pt, name) => "雾在这时候换了个流向。" + pt + "——" + name + "借着灯焰的边界看过去，那件事的轮廓比刚才清楚了一分，也冷了一分。",
+  (pt, name) => name + "心里明白：" + pt + "。这笔账不能拿记忆去抵，可灯芯上剩下的油，确实又短了一截。",
+  (pt, name) => "后来回想，" + pt + "这件事真正的分量不在当下，而在它替下一座沉镇点起的第一线灯花。" + name + "此刻只来得及做一件事：把灯稳住。",
+];
+const NEW_PHASE_PTS = [
+  "雾汛有了结果，消息传回灯岬",
+  "渡船各就各位，各自的事各自扛",
+  "变化的余波散开，牵出新的门牌",
+  "有人拿定了主意，也有人还悬着心",
+  "新的线索浮上来，指向下一座沉镇",
+  "旧账翻过一页，渡船压向新的水道",
+  "雾退了半分，所有人抓紧换灯芯的空当",
+  "夜色沉下来，守灯的人接管了灯岬",
+];
+const NEW_BOOK_OPENERS = [
+  "雾从海面上立起来，像一堵会呼吸的墙。",
+  "灯芯上的火苗压得很低，低到只在灯罩里留下一粒豆大的光。",
+  "潮气混着灯油味漫上码头，系缆桩上的旧绳结都湿透了。",
+  "远处的雾里传来钟声，一下，又一下，不知是哪座沉镇在报时。",
+  "风把雾道上的门牌吹得轻轻摇晃，铁环碰着木牌，像谁在叩门。",
+  "雾退了半尺，又悄悄涨回来，仿佛海在一呼一吸之间拿不定主意。",
+  "灯码的余光还留在眼底：一短两长，是「有人在」的意思。",
+  "水面平静得过分，平静得像一块蒙了灰的镜子。",
+  "灯岬的雾警钟哑了一整天，哑得让人心里发毛。",
+  "碎瓷片在礁石缝里闪了一下，像谁眨了下眼。",
+];
+function chapterTitleOf(prompt, num) {
+  const m = /续写第\d+章\s*([^\s。，；、]+)/.exec(prompt);
+  return m ? m[1] : "第" + num + "章";
+}
+/** 新书每段以「〔章题〕」开头：章题全书唯一，保证跨章段首 30 字不重复。 */
+function newBookTag(num, prompt) {
+  return "〔" + chapterTitleOf(prompt, num) + "〕";
+}
+function newBookChapterBase(num, prompt) {
+  const opener = NEW_BOOK_OPENERS[num % NEW_BOOK_OPENERS.length];
+  return (
+    newBookTag(num, prompt) +
+    opener +
+    "苏小灯把母亲的黄铜灯举到齐眉的位置，灯芯上那粒不灭的火烧得很稳，照出雾海边界上细细的一线。"
+  );
+}
 function expandToTarget(base, num, prompt) {
   const target = parseTargetWords(prompt) || 2000;
-  const names = parseNames(prompt, ["岑野舟", "阿泊", "洛云雀", "半夏", "巴图"]);
   const wc = (s) => s.replace(/\s+/g, "").length;
+  const facts = outlineFacts(prompt);
+  const tag = facts.isNew ? newBookTag(num, prompt) : "";
   let out = base;
-  let i = 0;
-  const seed = num * 7;
-  while (wc(out) < target) {
-    const paragraph = [];
-    for (let j = 0; j < 4 && wc(out + paragraph.join("")) < target; j++) {
-      const tpl = EXPAND_SENTENCES[(seed + i * 3 + j * 5) % EXPAND_SENTENCES.length];
-      paragraph.push(tpl.replace(/\{name\}/g, names[(seed + i + j) % names.length]));
+  // 要点池：章纲要点优先；不足时用阶段要点补充。阶段要点标注轮次，
+  // 每轮语义递进（等待→应对→余波→决断→新线索），不是复读同一句。
+  const pool = [];
+  let k = 0;
+  while (pool.length < 400) {
+    if (k < facts.pts.length) pool.push(facts.pts[k]);
+    else {
+      const round = Math.floor((k - facts.pts.length) / facts.phasePts.length) + 1;
+      const pp = facts.phasePts[(k - facts.pts.length + num) % facts.phasePts.length];
+      pool.push(pp + "（第" + round + "轮推进）");
     }
-    out += "\n\n" + paragraph.join("");
+    k++;
+  }
+  let i = 0;
+  while (wc(out) < target && i < pool.length) {
+    out += "\n\n" + renderAspect(facts, i, pool[i], tag);
     i++;
-    if (i > 200) break;
   }
   return out;
 }
 function proseForTarget(num, prompt) {
-  const base = readManuscript()[num] ?? CHAPTER_PROSE[num] ?? `第${num}章的夜比往常更沉。岑野舟守在舵位，把这一段航路的每一个浪口，又数了一遍。`;
+  // 新书不走《泊星港》正稿底稿（CHAPTER_PROSE 全是旧书人物与意象，
+  // manuscript.json 已删），改用章题 + 雾海开场句起稿，再章纲驱动扩写。
+  const base = isNewBook(prompt)
+    ? newBookChapterBase(num, prompt)
+    : readManuscript()[num] ?? CHAPTER_PROSE[num] ?? "第" + num + "章的夜比往常更沉。岑野舟守在舵位，把这一段航路的每一个浪口，又数了一遍。";
   return expandToTarget(base, num, prompt);
 }
 /** 补写请求（【续写要求】）：只返回新增段落，不复述前文。 */
 function continuationForTarget(num, prompt) {
   const target = parseTargetWords(prompt) || 2000;
-  const names = parseNames(prompt, ["岑野舟", "阿泊", "洛云雀", "半夏", "巴图"]);
   const wc = (s) => s.replace(/\s+/g, "").length;
+  const facts = outlineFacts(prompt);
+  const tag = facts.isNew ? newBookTag(num, prompt) : "";
   const out = [];
   let i = 0;
-  const seed = num * 11 + 3;
-  while (wc(out.join("\n\n")) < Math.max(400, target * 0.4)) {
-    const paragraph = [];
-    for (let j = 0; j < 4; j++) {
-      const tpl = EXPAND_SENTENCES[(seed + i * 5 + j * 3) % EXPAND_SENTENCES.length];
-      paragraph.push(tpl.replace(/\{name\}/g, names[(seed + i * 2 + j) % names.length]));
-    }
-    out.push(paragraph.join(""));
+  const pool = facts.pts.length ? facts.pts : ["事态继续向前推进"];
+  while (wc(out.join("\n\n")) < Math.max(400, target * 0.4) && i < pool.length * 3) {
+    out.push(renderAspect(facts, i, pool[i % pool.length], tag));
     i++;
-    if (i > 100) break;
   }
   return out.join("\n\n");
 }
