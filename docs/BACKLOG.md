@@ -64,6 +64,14 @@ novel-store 续切）为可维护性重构，非缺陷，留待后续按切片�
 
 2026-09-07：AN-041 收口 Web 端接受候选稿后的任务状态刷新缺陷（详见 P1 表）。同期新增实验性外部工具（不属产品能力）：`scripts/amy-author-model.mjs`（本地 OpenAI 兼容"作者模型"示例）、`scripts/author-headless.mjs`（项目数据包无头批处理 CLI）、`docs/AI_AUTHORING_WORKFLOW.md`（AI 主笔操控写作工作流记录，含 120 章完本示例数据）。
 
+2026-09-17（晚）：新书二《万纹忍尊》（novelId 971Dlg_1Z3WKzBMmJHvCc）从 0 到完本一次收口。
+火影×斗罗风少年升级流（番茄男频向，世界观名词全部原创，IP 词零出现）：作者模型
+扩展为三书路由（bookKind：泊星港 / 灯匠与雾海 / 万纹忍尊），扩写素材三套完全
+隔离。应用内 createNovel → startCruise，wizard 十步全代签自动走完，36 分钟连跑
+12 周期零人工干预。终检：245,626 字、单章 2000–2091、2657 段段首跨章查重 0、
+120 标题全唯一、三书交叉污染与 IP 词（查克拉/写轮眼/木叶/魂环/魂师/唐门等）零
+命中。书稿导出 `书稿/万纹忍尊-全120章-达标版.md`，项目包 `backups/万纹忍尊.amy-novel.json`。
+
 2026-09-17：新书《灯匠与雾海》（novelId 6peGhzqIJc6rYAA0D8SLL）120 章全自动巡航收工。
 上一会话（HANDOFF-20260914）遗留 scenes 阶段失败暂停；本日定位真凶并修复三处作者模型
 缺陷（AN-058），巡航 21:28 启动、21:35–22:35 连跑 12 周期，中途发现周期 11/12 弧线
@@ -89,6 +97,7 @@ clamp 导致 101–120 章标题与 91–100 重复（149 个重复段首），�
 | AN-056 | [x] | AN-044 孤儿任务自愈遗漏 waiting_retry 状态（复审自纠） | 2026-09-13 复审发现：页面刷新同样会杀死重试退避的 setTimeout，waiting_retry 任务在运行器重启后永远停等一个不存在的计时器——循环跳过它把批次收成 completed，形成黑洞章（与 generating/building_context 同类）。修复：孤儿重置条件补上 waiting_retry（合法转移 waiting_retry→queued）| tests/web/run-batch-orphan-reset.test.ts：三种孤儿状态在 runBatch 启动时全部重置回 queued 并留事件痕；pnpm check 256 项通过 |
 | AN-057 | [x] | 作者模型扩写器重写为章纲驱动 + 新书《灯匠与雾海》全套数据（作者模型脚本，不属产品能力） | 旧实现的 16 句模板按固定索引轮换，长章大段复读。重写为「章纲要素展开」：章纲拆事件要点，每段从五种侧面（动作/对话/环境/内心/后果）独立展开，不足时用带轮次标注的阶段要点递进补充；新书每段以「〔章题〕」开头保证跨章段首唯一。同一提交新增新书全套规划数据（BIBLE/CAST/SCENES/PERSONA/BRIEF/12 周期 structure 生成器）与 isNewBook 提示词路由，扩写素材（人名/侧面/阶段要点/底稿）按书隔离，杜绝旧书《泊星港》底稿与人名渗入新书 | 2026-09-17 实测：非流式 curl 全阶段真实 zod schema 解析通过（scenePlan/biblePlan/castPlan/structurePlan，新旧书对照）；新书巡航 120 章全书 2688 段段首跨章查重 0、零旧书词汇（10 词扫描 0 命中） |
 | AN-058 | [x] | 新书巡航三处阻断缺陷（作者模型脚本，不属产品能力） | ① NEW_BOOK_SCENES 带 `entityRef: null` 违反 `z.string().optional()`（optional 不接受 null）→ scenes 阶段解析失败触发 AN-004 修复请求，而修复提示词不含阶段触发词被 phaseOf 兜底路由到 bible，修复响应是圣经 JSON → 恒败暂停（09-14 与 09-17 两次同形失败）。删 null（省略即可）后通过。② newBookStructure 章节卷名「卷二·灯记2」与 volumes 列表「卷二·灯记2-3」不匹配，周期 2 structure 业务校验（normalizeVolumeTitle）拒绝；卷名改从 volNames 常量取，与卷列表一一对齐。③ goals/titles 只备 10 周期而全书 12 周期，周期 11/12 clamp 复用周期 10 → 第 101–120 章与 91–100 章标题全同，「〔章题〕」段首标签撞车（首跑终检 149 个重复段首）；补齐 12 条弧线后解封周期 10–12（completed→needs_revision）重放。附带：parseOutline 兼容真实提示词标签「章节大纲：/大纲：」（原正则「章纲：」恒不匹配，章纲驱动从未真正生效） | 12 周期 zod+业务校验（章数/位置/卷名/全书 120 标题唯一）全过；重放后终检：244,969 字、单章 2000–2091、12/12 周期封存、重复段首 0、标题重复 0、零旧书词汇；书稿与项目包已导出 |
+| AN-059 | [x] | 新书二《万纹忍尊》从 0 到完本（作者模型脚本，不属产品能力） | 火影×斗罗风少年升级流（番茄男频向）：九坞/兽纹/纹徒-纹神九阶/任务榜六级/蚀纹教全部原创名词，bible 边界明令禁止两部原作专有词。作者模型重构为三书路由（bookKind：old/book1/book2，brief/advisory/persona/bible/cast/scenes/structure/prose 全分支），扩写素材三套完全隔离（人名/五侧面/阶段要点/开场句/底稿），并吸取 AN-058 教训：cast 含 recurring 档（荀先生）+ 人格推荐覆盖全部 support（含沈鹫），一致性检查一次通过 | 上线前验证全绿（6 阶段 zod、12 周期业务校验、120 标题唯一、prose 查重、三书零交叉污染、IP 词零命中、前两书回归无损）；线上：createNovel→startCruise 后 wizard 十步全代签，36 分钟 12 周期零干预收工；终检 245,626 字、单章 2000–2091、2657 段查重 0、120 标题唯一；书稿与项目包已导出 |
 | AN-055 | [x] | 连读页点目录章节跳回首页，无法正常阅读 | 2026-09-13 用户实测：目录用裸锚点 href="#book-ch-N"，应用是 HashRouter（路由存于 # 后），点击后被解析为路由 book-ch-N → 匹配不到 → 通配路由 Navigate 回首页。AN-031 引入连读页即存在。修复：目录点击 preventDefault + scrollIntoView 滚动定位（正文 article 的锚点 id 保留）| tests/web/book-reader-toc.test.tsx 回归：目录点击 preventDefault、scrollIntoView 调用、路由不跳转；pnpm check 255 项通过 |
 | AN-054 | [x] | 巡航重放三处复审修正（代码审查自纠） | ①AN-052 等待窗口误用 run.updatedAt 作基准（completed 分支时已被终态更新推到刚刚，防护恒跳过）→ 改 run.createdAt；②AN-050 把被新稿取代的旧候选残留建议也接受进正史（被放弃草稿的事实污染正史）→ 按候选内容与正史一致性分流：一致接受、取代拒绝；③startCruise 无条件清运行索引会抹掉作者手动 Autopilot 的在途运行 → 仅在无 running/paused 运行时清理 | pnpm check 254 项通过、双端生产构建通过 |
 | AN-053 | [x] | 重放场景缺「清运行索引」产品动作，旧运行误导巡航进度 | 2026-09-13 实测：重放已封存周期前必须手工删运行索引，且内存镜像在平台写入路径下会回填已删数据。修复：新增 PlatformPort.clearWorkflowRuns（Web remove 写穿 / Electron workflow_runs.clear SQL）+ store.clearWorkflowRuns 动作；startCruise 启动时自动清理（运行索引不是正史，批次/候选/正史/审计不受影响）| 双端实现 + 类型贯通；pnpm check 254 项通过；重放 61–120 实测巡航按新链路运转 |

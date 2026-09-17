@@ -7626,6 +7626,13 @@ const NEW_BOOK_SCENES = {
 function isNewBook(prompt) {
   return /灯匠|雾海|苏小灯/.test(prompt);
 }
+/** 三书路由：book2《万纹忍尊》→ book1《灯匠与雾海》→ old《泊星港》。 */
+function bookKind(prompt) {
+  if (/万纹忍尊|九坞|江野/.test(prompt)) return "book2";
+  if (isNewBook(prompt)) return "book1";
+  return "old";
+}
+const pick = (kind, book2, book1, old) => (kind === "book2" ? book2 : kind === "book1" ? book1 : old);
 const NEW_BRIEF_DRAFT = {
   audience: "14-35 岁男女通吃的治愈冒险读者；喜欢解谜、地图点亮与轻奇幻设定；夜读为主，追更动力是「下一座镇的故事」。",
   style: "第三人称限知（跟随苏小灯）；嗅觉触觉开场、灯光切画面；对话短促口语化；每章一个沉镇线索加一次心跳时刻，章末必留钩子。",
@@ -7719,14 +7726,171 @@ function newBookStructure(start, end) {
     proposals: [],
   };
 }
+
+// ─── 新书二《万纹忍尊》：火影×斗罗风少年升级流（番茄男频向，全部原创名词）──
+const NEW2_BOOK_BIBLE = {
+  sections: [
+    { kind: "intent", content: "男频少年升级流爽文：开纹受辱→吞纹逆袭→任务晋级→坞际扬名→真相复仇。爽点三件套：吞纹进化、排位打脸、境界突破；情感主轴是「白板之证道」与「黑潮之夜真相」。番茄节奏：黄金三章内金手指亮相，每章一个爽点加一个钩子。" },
+    { kind: "world", content: "【玄洲九坞】兽潮侵蚀大陆，人类退守九座坞堡，烬火坞居首，落雁坞垫底。【开纹礼】十二岁于灵台烙下本命兽纹，纹分十年纹、百年纹、千年纹、万年纹、传说纹；猎杀荒兽可「封纹」入栏。【纹栏】常人至多九栏；境界九阶：纹徒（一至九星）、纹士、纹师、大纹师、纹尊、纹王、纹皇、纹圣、纹神。【任务榜】九坞共设，任务分级灰白青蓝紫金。【蚀纹教】邪教，以人纹饲兽、制造兽潮，十年前「黑潮之夜」屠落雁坞外三镇的元凶。" },
+    { kind: "style", content: "第三人称限知（跟随江野）；开章三行内进冲突；打斗写纹光、兽吼与身体反应，不堆招式名词；对话短平快带梗；每章一个爽点一个钩子，章末断在意难平处；升级与战力对比用具体兽纹年份与星级呈现，禁数值面板。" },
+    { kind: "boundaries", content: "1. 不出现《火影忍者》《斗罗大陆》专有名词（查克拉、写轮眼、木叶、忍术、魂环、魂师、唐门等），世界观名词一律原创。2. 不后宫，感情线单线慢热。3. 不血腥肢解，兽潮伤亡写意不写细节。4. 主角不圣母：恩怨分明，但不滥杀。5. 无系统面板与穿越设定，金手指只此「万纹之体」。6. 反派立场自洽：熄纹派是恐惧驱动的路线之争，不是蠢坏。7. 境界不得跳级，每次突破须有代价或契机。" },
+  ],
+  characters: [
+    { type: "character", name: "江野", summary: "14 岁落雁坞猎户遗孤，黑潮之夜幸存者", aliases: ["小野"], profile: { 身份: "落雁坞学徒纹师", 目标: "查清黑潮之夜真相，把落雁坞带回九坞之首", 秘密: "万纹之体：白纹可吞噬兽纹无限融合", 语言习惯: "紧张时摩挲左手腕的旧疤" } },
+    { type: "character", name: "洛小棠", summary: "烬火坞交换生，百年火凤纹天才", aliases: [], profile: { 身份: "百兽学堂交换生", 目标: "证明女子火纹不输任何人", 秘密: "家族火凤纹正在反噬她的灵台" } },
+    { type: "character", name: "秦无衣", summary: "落雁坞任务榜第一的独臂大纹师，江野小队导师", aliases: ["秦教官"], profile: { 身份: "落雁坞猎人堂教官", 目标: "赎黑潮之夜没能守住三镇之罪", 秘密: "断臂里封着一枚万年纹，动用一次折寿一年" } },
+  ],
+  entities: [
+    { type: "location", name: "落雁坞", summary: "九坞末位坞堡，江野的家乡，外三镇毁于黑潮之夜", aliases: [] },
+    { type: "organization", name: "九坞议会", summary: "九坞最高议事机构，内分正纹派与熄纹派", aliases: [] },
+    { type: "item", name: "白纹", summary: "江野的本命兽纹，无年份无属性，实为万纹之体的种子", aliases: [] },
+    { type: "term", name: "封纹", summary: "猎杀荒兽后将其兽纹烙入纹栏的仪式", aliases: [] },
+  ],
+};
+const NEW2_BOOK_CAST = {
+  characters: [
+    { type: "character", name: "江野", summary: "14 岁落雁坞学徒，开纹礼得白纹被讥「白板」，实为万纹之体", aliases: ["小野"], tier: "protagonist", profile: { 身份: "落雁坞学徒纹师", 性格: "外冷内燃，恩怨分明", 目标: "查清黑潮之夜，带落雁坞回九坞之首", 恐惧: "再次无能为力地看着身边人死去", 缺陷: "把什么都自己扛", 秘密: "白纹可吞兽纹无限融合", 语言习惯: "紧张时摩挲左腕旧疤" } },
+    { type: "character", name: "洛小棠", summary: "烬火坞交换生，火凤纹天才，嘴硬心软", aliases: [], tier: "support", profile: { 身份: "百兽学堂交换生", 性格: "傲而不毒，输不起更赢不惯", 目标: "证明女子火纹不输任何人", 恐惧: "火凤反噬失控伤到队友", 缺陷: "嘴比脑子快", 秘密: "火凤纹正在反噬她的灵台", 语言习惯: "夸人先损一句" } },
+    { type: "character", name: "石铁柱", summary: "同队壮汉，重岩纹铁匠之子，憨直重义", aliases: ["铁柱"], tier: "support", profile: { 身份: "铁匠铺少东家", 性格: "憨直，认死理，护短", 目标: "把家传重岩纹炼成传说纹", 恐惧: "打铁的手握不住刀", 缺陷: "脑子一根筋", 秘密: "重岩纹里封着祖父的遗纹", 语言习惯: "口头禅「包在我身上」" } },
+    { type: "character", name: "秦无衣", summary: "独臂大纹师教官，任务榜第一，黑潮之夜幸存者", aliases: ["秦教官"], tier: "support", profile: { 身份: "落雁坞猎人堂教官", 性格: "外冷内热，规矩即铠甲", 目标: "赎黑潮之夜失守之罪", 恐惧: "断臂万年纹再出鞘", 缺陷: "把罪都记在自己账上", 秘密: "断臂封着万年纹，动用一次折寿一年", 语言习惯: "训话只讲一遍" } },
+    { type: "character", name: "沈鹫", summary: "九坞议会熄纹派首座，蚀纹教暗子", aliases: [], tier: "support", profile: { 身份: "熄纹派首座", 性格: "温文尔雅，算无遗策", 目标: "以九坞之乱祭「万纹归一」之术", 恐惧: "黑潮之夜的证据重见天日", 缺陷: "过分相信所有人都在棋盘上", 秘密: "十年前亲手引兽潮屠三镇", 语言习惯: "把杀意包在关怀里" } },
+    { type: "character", name: "荀先生", summary: "百兽学堂老教习，退休老猎人", aliases: [], tier: "recurring", profile: { 出现条件: "学堂授课与授勋场合", 性格标签: "啰嗦但料事如神" } },
+  ],
+  extras: ["铁匠铺石老爹", "学堂教习荀先生", "任务榜管事", "烬火坞使节"],
+};
+const NEW2_BOOK_SCENES = {
+  scenes: [
+    { name: "落雁坞猎人堂", aliases: [], summary: "坞堡中枢，开纹礼、任务榜与授勋都在此", purpose: "接单、授勋、冲突爆发的主场", mood: "松烟、兽皮、铜锣味", visualAnchors: ["褪色的任务榜", "挂满旧纹牌的功勋墙", "悬顶的青铜坞钟"], residents: "秦无衣", dangerLevel: "低" },
+    { name: "百兽学堂", aliases: [], summary: "落雁坞与八坞交换生共读的学堂，排位战之台", purpose: "成长与竞争的主舞台", mood: "墨、竹简、汗味", visualAnchors: ["九坞分列的演武台", "兽纹沙盘", "每年刻一行的碑林"], residents: "荀先生", dangerLevel: "低" },
+    { name: "雾牙山", aliases: [], summary: "坞外第一道猎场，狼群与雾牙兽出没", purpose: "新人任务与初次实战", mood: "湿雾、兽毛、铁锈血腥气", visualAnchors: ["半掩的猎屋", "挂骨的歪脖子树", "只露脊背的黑潭"], residents: "无", dangerLevel: "高" },
+    { name: "黑潮废墟", aliases: [], summary: "落雁坞外三镇遗址，黑潮之夜留下的死地", purpose: "真相线主舞台", mood: "灰烬味、蚀进石墙的兽爪痕", visualAnchors: ["停摆的镇钟", "烧成琉璃的地缝", "一夜白头的碑林"], residents: "无", dangerLevel: "极高" },
+    { name: "兽潮断层带", aliases: [], summary: "九坞防线最外沿，兽潮第一波永远砸在这里", purpose: "大战与决战舞台", mood: "大地低鸣、纹光夜空", visualAnchors: ["九坞联防烽燧", "沉在土里的巨型兽骨", "风化的战死者名录墙"], residents: "联防军", dangerLevel: "高" },
+  ],
+  entities: [
+    { type: "organization", name: "蚀纹教", summary: "以人纹饲兽、制造兽潮的邪教，黑潮之夜的元凶", aliases: [], profile: {} },
+    { type: "item", name: "兽纹", summary: "每个纹师灵台的兽纹，力量与身份的凭证", aliases: [], profile: {} },
+    { type: "term", name: "任务等级", summary: "灰白青蓝紫金六级，对应授勋与报酬", aliases: [], profile: {} },
+  ],
+};
+const NEW2_BOOK_PERSONA = {
+  recommendations: [
+    { name: "江野", personaType: "ISTP · 沉默的吞纹者", reason: "把丧亲之痛炼成升级执念的少年：吞纹金手指由他的人格驱动——不炫耀、只变强，是全书爽感的锚。", writingConstraints: "话少但句句落地；战斗先观察后出手；受辱不辩解用战绩回击；提到黑潮之夜时摩挲左腕旧疤。", speechHabit: "极短句；确认任务时只说一个字「接」。" },
+    { name: "洛小棠", personaType: "ESTJ · 火凤家的刺", reason: "烬火坞天才交换生，与江野从针锋相对到并肩；她承担「天才的代价」副线，防止全书只有主角有弧光。", writingConstraints: "夸人先损一句；战斗指挥果断；火凤反噬时死撑不喊疼；对江野的在意藏在嫌弃里。", speechHabit: "口头禅「就这？」；生气时报家门。" },
+    { name: "石铁柱", personaType: "ISFJ · 铁打的憨", reason: "力量型队友与气氛担当，铁匠铺出身给团队 grounding；他的重岩纹家史是小队羁绊的粘合剂。", writingConstraints: "说话直来直去；打架永远站在最前；答应的事砸锅卖铁也办；提到祖父会红了眼眶。", speechHabit: "口头禅「包在我身上」；紧张时搓手。" },
+    { name: "秦无衣", personaType: "INTJ · 独臂的守夜人", reason: "导师与暗线钥匙：断臂万年纹是全书最大的战术底牌，黑潮之夜的赎罪者是他的底色。", writingConstraints: "训话只讲一遍；护短但从不承认；动用万年纹必有折寿的克制感；夜深独处时看功勋墙。", speechHabit: "指令式短句；口头禅「记住，活着回来」。" },
+    { name: "沈鹫", personaType: "ENTJ · 棋盘上的慈父", reason: "反派首座：以关怀为面具的操盘手，路线之争的另一步棋；他让「熄纹」听起来像慈悲。", writingConstraints: "从不说狠话，只给「为你好」的选项；杀伐藏在议程里；被戳穿时先笑再翻脸；绝不亲自动手直到终局。", speechHabit: "称呼晚辈「孩子」；爱用议事规程压人。" },
+  ],
+};
+const NEW2_BRIEF_DRAFT = {
+  audience: "16-40 岁男频读者为主；碎片时间追更，吃升级打脸与身份反转；对忍者村落、魂兽觉醒类设定有天然亲和；番茄小说夜读高峰追更。",
+  style: "第三人称限知（跟随江野）；快节奏爽文体：开章三行进冲突，每章一个爽点一个钩子；对话短平快；打斗重画面轻数值。",
+  boundaries: "不抄火影/斗罗专有名词；不后宫；不血腥；不圣母；无系统面板无穿越。",
+  sellingPoint: "开纹礼只得「白板」的废柴少年，靠万纹之体吞尽荒兽纹章，从九坞末位的小透明一路吞到忍尊之位——每一枚兽纹，都是他逆袭的台阶。",
+  conflict: "江野与熄纹派首座沈鹫在「人该不该继续用纹」上的路线之争；暗线是黑潮之夜的真相与蚀纹教的阴谋。",
+  protagonistGoal: "查清黑潮之夜、为父母与三镇复仇、带落雁坞重回九坞之首；失败则万纹之体被蚀纹教夺走，沦为制造兽潮的炉鼎。",
+  ending: "兽潮决战江野以万纹之体定住兽潮源头，沈鹫伏诛；九坞废熄纹令，江野受封首任「忍尊」，守护新的和平。",
+};
+const NEW2_ADVISORY = {
+  recommendation: {
+    tierLabel: "标准档（24 万字级）",
+    totalChapters: 120,
+    chapterWords: 2000,
+    dailyChapters: 1,
+    estimatedDays: 120,
+    reason: "任务升级流+坞际大赛+真相复仇的三段结构需要约 24 万字铺开；番茄男频先以 120 章跑通 30 章追读考核，数据好再续。",
+  },
+  milestones: [
+    { position: 3, label: "黄金三章", goal: "第 1 章开纹受辱，第 2 章白纹吞纹觉醒，第 3 章雾牙山首胜立威" },
+    { position: 10, label: "首个小高潮", goal: "狼王一战成名，小队成组拿到首枚勋章" },
+    { position: 30, label: "追读考核点", goal: "坞际新生赛开打，白纹之名震动九坞" },
+    { position: 60, label: "中期反转", goal: "赛场血洗，万年兽纹现世，江野吞噬失控" },
+    { position: 120, label: "第一卷大高潮", goal: "兽潮决战万纹归一，沈鹫伏诛，江野受封忍尊" },
+  ],
+  volumeSkeleton: [
+    { title: "卷一·雏纹", startChapter: 1, endChapter: 30, goal: "受辱、觉醒、组队、首战立威", climax: "学堂排位战反败为胜" },
+    { title: "卷二·锋芒", startChapter: 31, endChapter: 60, goal: "任务晋级、坞际新生赛扬名", climax: "当众吸走火凤反噬" },
+    { title: "卷三·真相", startChapter: 61, endChapter: 90, goal: "赛场血洗、雷麟重修、黑潮真相", climax: "沈鹫罪行全貌揭晓" },
+    { title: "卷四·忍尊", startChapter: 91, endChapter: 120, goal: "议会血夜、九坞决战、新纪元", climax: "万纹归一定住兽潮" },
+  ],
+};
+// 12 条弧线 × 每周期 10 章，标题全书唯一
+function new2BookStructure(start, end) {
+  const cycleNo = Math.floor((start - 1) / 10) + 1;
+  const goals = [
+    { goal: "开纹礼得白纹受辱，雾牙山首战吞下第一枚狼纹，万纹之体觉醒", climax: "白纹吞纹进化，一击毙雾牙狼王" },
+    { goal: "灰白任务连升星位，学堂排位战首遇烬火坞交换生洛小棠", climax: "排位台上白纹再吞纹，反败为胜" },
+    { goal: "百兽学堂入学试，问题小队成组，铁柱重岩纹的秘密", climax: "组队战险胜，独臂教官秦无衣收下问题小队" },
+    { goal: "青级护商任务遇蚀纹教伏击，首次直面邪教", climax: "江野以封纹术破蚀纹阵，商队得救" },
+    { goal: "兽潮前哨异动，黑潮废墟探索，黑潮之夜的线索浮出", climax: "废墟地缝里发现刻着父母名字的纹牌" },
+    { goal: "坞际新生赛开幕，落雁坞对阵烬火坞", climax: "小棠火凤反噬暴露，江野白纹当众吸走反噬之火" },
+    { goal: "决赛变故：蚀纹教血洗赛场，万年兽纹现世", climax: "江野吞噬失控，秦无衣断臂万年纹压场" },
+    { goal: "禁地疗伤修行第二本命纹雷麟纹，熄纹派在九坞议会发难", climax: "雷麟纹千年封顶，江野重返纹师之列" },
+    { goal: "深入兽潮源头，人造兽潮的真相与父母之死的主谋", climax: "真相揭晓：沈鹫当年亲手引兽潮屠三镇" },
+    { goal: "九坞峰会决战动员，沈鹫撕下面具，蚀纹教全面起事", climax: "议会血夜，秦无衣以命断后" },
+    { goal: "兽潮决战：九坞联军对阵蚀纹兽潮，万纹之体终极进化", climax: "江野万纹归一，定住兽潮源头" },
+    { goal: "终章：新纪元，江野受封忍尊，落雁坞重回之首", climax: "纹神殿前，白纹化作第一万枚纹章" },
+  ];
+  const g = goals[Math.min(cycleNo - 1, goals.length - 1)];
+  const titles = [
+    ["开纹礼", "白板", "雾牙山的狼", "第一枚兽纹", "吞纹", "猎人堂的规矩", "灰色任务", "黑潭脊背", "狼王", "纹动"],
+    ["星位", "演武台", "烬火来的交换生", "火凤与白板", "排位战", "连胜", "青石巷的铁匠铺", "重岩之家", "三人小队", "第一枚勋章"],
+    ["入学试", "兽纹沙盘", "荀先生的问题", "学堂碑林", "组队战", "火凤的骄傲", "重岩的秘密", "问题小队", "独臂教官", "教官的规矩"],
+    ["青级任务", "商队", "雾中伏杀", "蚀纹教", "人纹饲兽", "封纹术", "破阵", "灰袍人", "商队的谢礼", "纹士之证"],
+    ["前哨异动", "断层带的烽燧", "黑潮废墟", "停摆的镇钟", "琉璃地缝", "父母的纹牌", "十年前的雨夜", "独臂的由来", "兽潮将至", "猎人堂夜议"],
+    ["坞际新生赛", "九坞云集", "落雁对烬火", "火凤展翼", "反噬", "当众吸火", "白纹之名", "八强", "半决赛的赌约", "决赛之前"],
+    ["决赛", "万年兽纹", "血洗赛场", "蚀纹教主", "吞噬失控", "断臂万年纹", "压场", "战后清算", "九坞震动", "休止符"],
+    ["疗伤禁地", "灵台重建", "雷麟纹", "千年封顶", "熄纹派", "议会发难", "正纹与熄纹", "路线之争", "重返纹师", "雷动"],
+    ["兽潮源头", "断层最深处", "人造兽潮", "主谋", "沈鹫", "十年之约碎", "真相全貌", "父母之死", "复仇之名", "回师九坞"],
+    ["九坞峰会", "撕下面具", "议会血夜", "烽燧全燃", "断后", "老兵", "动员令", "九坞联军", "决战前夜", "誓师"],
+    ["兽潮决战", "联军初捷", "蚀纹兽潮", "万纹归一", "定住源头", "沈鹫伏诛", "烽燧将熄", "潮退", "战场日出", "清点"],
+    ["新纪元", "废熄纹令", "落雁之首", "纹神殿", "第一万枚纹章", "忍尊", "小棠的选择", "铁柱的铺子", "教官的酒", "万纹忍尊"],
+  ];
+  const cyc = titles[Math.min(cycleNo - 1, titles.length - 1)];
+  // 章节卷名必须能对上 volumes 列表（normalizeVolumeTitle 剥掉（N-N章）后比对）
+  const volNames = ["卷一·雏纹", "卷二·锋芒", "卷三·真相", "卷四·忍尊"];
+  const volName = volNames[cycleNo <= 3 ? 0 : cycleNo <= 6 ? 1 : cycleNo <= 9 ? 2 : 3];
+  const chapters = [];
+  for (let i = 0; i < end - start + 1; i++) {
+    const pos = start + i;
+    const localIdx = pos - 1 - (cycleNo - 1) * 10;
+    const stage = localIdx % 10 < 3 ? "开局：任务与冲突" : localIdx % 10 < 7 ? "推进：猎纹与升级" : "收束：授勋与钩子";
+    chapters.push({
+      position: pos,
+      volumeTitle: volName,
+      title: "第" + pos + "章 " + (cyc[localIdx] ?? cyc[i % 10] ?? "纹"),
+      outline: stage + "。" + g.goal + "。本章围绕「" + (cyc[localIdx] ?? "纹") + "」展开：江野在小队配合中运用兽纹与封纹术，洛小棠提供火力压制，冲突来自蚀纹教暗手或荒兽暴动；结尾留钩子指向" + (cyc[(localIdx + 1) % 10] ?? "下一周期") + "。",
+      viewpoint: "江野",
+      characters: ["江野", "洛小棠"],
+      scenes: ["落雁坞", "雾牙山"],
+      items: ["白纹"],
+      skills: [],
+    });
+  }
+  return {
+    volumes: [
+      { title: "卷一·雏纹（1-30章）", outline: "受辱、觉醒、组队、首战立威：白板的逆袭起点" },
+      { title: "卷二·锋芒（31-60章）", outline: "任务晋级与坞际新生赛：白纹之名震动九坞" },
+      { title: "卷三·真相（61-90章）", outline: "血洗赛场、雷麟重修、黑潮真相：复仇之路铺开" },
+      { title: "卷四·忍尊（91-120章）", outline: "议会血夜、兽潮决战、新纪元：万纹归一" },
+    ],
+    cycle: {
+      goal: g.goal,
+      openingState: "猎人堂的日常或上一周期的余波",
+      climax: g.climax,
+      expectedClosingState: "一枚新兽纹封栏或一条真相落地，钩子未解",
+    },
+    chapters,
+    proposals: [],
+  };
+}
 const RESPONSES = {
   style: () => STYLE_ANALYSIS,
-  brief: (prompt) => (isNewBook(prompt) ? NEW_BRIEF_DRAFT : BRIEF_DRAFT),
-  advisory: () => ADVISORY,
-  persona: (prompt) => (isNewBook(prompt) ? NEW_BOOK_PERSONA : PERSONA),
-  bible: (prompt) => (isNewBook(prompt) ? NEW_BOOK_BIBLE : BIBLE),
-  cast: (prompt) => (isNewBook(prompt) ? NEW_BOOK_CAST : CAST),
-  scenes: (prompt) => (isNewBook(prompt) ? NEW_BOOK_SCENES : SCENES),
+  brief: (prompt) => pick(bookKind(prompt), NEW2_BRIEF_DRAFT, NEW_BRIEF_DRAFT, BRIEF_DRAFT),
+  advisory: (prompt) => pick(bookKind(prompt), NEW2_ADVISORY, ADVISORY, ADVISORY),
+  persona: (prompt) => pick(bookKind(prompt), NEW2_BOOK_PERSONA, NEW_BOOK_PERSONA, PERSONA),
+  bible: (prompt) => pick(bookKind(prompt), NEW2_BOOK_BIBLE, NEW_BOOK_BIBLE, BIBLE),
+  cast: (prompt) => pick(bookKind(prompt), NEW2_BOOK_CAST, NEW_BOOK_CAST, CAST),
+  scenes: (prompt) => pick(bookKind(prompt), NEW2_BOOK_SCENES, NEW_BOOK_SCENES, SCENES),
   facts: (prompt) => {
     // 软件的事实提取提示词只带正文不带章号（"正文：\n{{content}}"），
     // 所以先按章号、再按正文开头反查章号，否则永远返回空提案。
@@ -7737,7 +7901,13 @@ const RESPONSES = {
   },
   review: () => REVIEW_EMPTY,
   structure: (prompt) => {
-    if (isNewBook(prompt)) {
+    const kind = bookKind(prompt);
+    if (kind === "book2") {
+      const range = /只规划第\s*(\d+)–(\d+)\s*章/.exec(prompt);
+      const s = range ? Number(range[1]) : 1, e = range ? Number(range[2]) : s + 9;
+      return new2BookStructure(s, e);
+    }
+    if (kind === "book1") {
       const range = /只规划第\s*(\d+)–(\d+)\s*章/.exec(prompt);
       const s = range ? Number(range[1]) : 1, e = range ? Number(range[2]) : s + 9;
       return newBookStructure(s, e);
@@ -7990,18 +8160,18 @@ function splitOutlinePoints(outline) {
 function outlineFacts(prompt) {
   const outline = parseOutline(prompt);
   const pts = splitOutlinePoints(outline);
-  // 按书选料：新书的扩写素材（人名/侧面/阶段要点）与《泊星港》完全隔离，
-  // 防止旧书人物与航海意象渗进《灯匠与雾海》的正文。
-  const isNew = isNewBook(prompt);
-  const names = parseNames(prompt, isNew ? NEW_BOOK_NAMES : ["岑野舟", "阿泊", "洛云雀", "半夏", "巴图", "聂镇川"]);
-  const aspects = isNew ? NEW_ASPECTS : ASPECTS;
-  const phasePts = isNew ? NEW_PHASE_PTS : PHASE_PTS;
+  // 按书选料：三本书的扩写素材（人名/侧面/阶段要点）完全隔离，
+  // 防止一本书的人物与意象渗进另一本的正文。
+  const kind = bookKind(prompt);
+  const names = parseNames(prompt, kind === "book2" ? NEW2_BOOK_NAMES : kind === "book1" ? NEW_BOOK_NAMES : ["岑野舟", "阿泊", "洛云雀", "半夏", "巴图", "聂镇川"]);
+  const aspects = kind === "book2" ? NEW2_ASPECTS : kind === "book1" ? NEW_ASPECTS : ASPECTS;
+  const phasePts = kind === "book2" ? NEW2_PHASE_PTS : kind === "book1" ? NEW_PHASE_PTS : PHASE_PTS;
   const extras = [];
   const vm = /视角[：:]\s*([^\s，。]{2,6})/.exec(prompt);
   if (vm) extras.push(vm[1]);
   for (const s of [...prompt.matchAll(/(?:场景|地点)[：:]\s*([^\s，。\n]{2,8})/g)].slice(0, 4)) extras.push(s[1]);
   for (const s of [...prompt.matchAll(/(?:道具|物品)[：:]\s*([^\s，。\n]{2,8})/g)].slice(0, 4)) extras.push(s[1]);
-  return { isNew, pts, extras, names, aspects, phasePts };
+  return { kind, isNew: kind !== "old", pts, extras, names, aspects, phasePts };
 }
 /** 五种展开侧面：内容（章纲要点）不同，措辞模式循环但段落事实不重复。 */
 const ASPECTS = [
@@ -8013,7 +8183,7 @@ const ASPECTS = [
 ];
 function renderAspect(facts, index, pt, tag) {
   const name = facts.names[index % facts.names.length];
-  const eye = facts.isNew ? "她的眼睛。" : "他的眼睛。";
+  const eye = facts.kind === "book1" ? "她的眼睛。" : "他的眼睛。";
   const extra = facts.extras.length ? " " + facts.extras[index % facts.extras.length] + "的细节也没有逃过" + eye : "";
   return tag + facts.aspects[index % facts.aspects.length](pt, name) + extra;
 }
@@ -8075,6 +8245,46 @@ function newBookChapterBase(num, prompt) {
     "苏小灯把母亲的黄铜灯举到齐眉的位置，灯芯上那粒不灭的火烧得很稳，照出雾海边界上细细的一线。"
   );
 }
+// ─── 新书二《万纹忍尊》扩写素材（与上两组完全隔离）───────────────────────
+const NEW2_BOOK_NAMES = ["江野", "洛小棠", "石铁柱", "秦无衣", "沈鹫"];
+/** 同样五种侧面，但意象换成兽纹/任务榜/坞堡。 */
+const NEW2_ASPECTS = [
+  (pt, name) => pt + "。" + name + "把灵台里的兽纹又数了一遍——猎人堂的规矩：出门前先点纹，纹齐了胆才齐。",
+  (pt, name) => "「" + pt + "。」" + name + "说得很短，像任务榜上最不起眼的一行灰字；但队里每个人都听懂了灰字底下压着的血。",
+  (pt, name) => "纹光在这时候换了一种颜色。" + pt + "——" + name + "顺着纹光的边界看过去，那件事的轮廓比刚才清楚了一分，也狰狞了一分。",
+  (pt, name) => name + "心里清楚：" + pt + "。这不是靠星位硬堆能过的坎——得把兽纹的年份和地利都算进去，一步都错不得。",
+  (pt, name) => "后来回想，" + pt + "这件事真正的分量不在当下，而在它替小队挣来的第一枚勋章。" + name + "此刻只来得及做一件事：把阵脚稳住。",
+];
+const NEW2_PHASE_PTS = [
+  "兽潮的动向有了结果，消息传回猎人堂",
+  "小队各就各位，各自的事各自扛",
+  "战斗的余波散开，牵出新的任务",
+  "有人拿定了主意，也有人还悬着心",
+  "新的兽纹浮上台面，指向下一处猎场",
+  "旧账翻过一页，队伍压向新的断层",
+  "潮头退了半分，所有人抓紧换绷带的空当",
+  "夜色沉下来，值夜的灯火接管了坞墙",
+];
+const NEW2_BOOK_OPENERS = [
+  "兽吼从断层带方向滚过来，闷得像大地在清嗓子。",
+  "纹光在灵台里转了半圈，停在一枚新烙的兽纹上。",
+  "任务榜前围满了人，铜锣声一响，灰字任务眨眼被抢空。",
+  "演武台的青石又裂了一道缝，那是昨夜排位战留下的。",
+  "坞钟响了三下，又三下，是猎队归航的号。",
+  "雾从雾牙山漫下来，把猎屋的火光压成一小团橘红。",
+  "兽骨在断层带的土里半沉半浮，像大地没咽干净的牙。",
+  "烽燧上一星火，隔着十里都看得见，可谁都不希望看见它。",
+  "纹牌碰在一起，叮的一声轻响，像谁在数还活着的人。",
+  "风把黑潮废墟的灰烬吹起来，落在肩上，怎么拍都拍不干净。",
+];
+function new2BookChapterBase(num, prompt) {
+  const opener = NEW2_BOOK_OPENERS[num % NEW2_BOOK_OPENERS.length];
+  return (
+    newBookTag(num, prompt) +
+    opener +
+    "江野把左手腕上的旧疤摩挲了两下，灵台深处那枚白纹安安静静地亮着，像在等下一顿饱餐。"
+  );
+}
 function expandToTarget(base, num, prompt) {
   const target = parseTargetWords(prompt) || 2000;
   const wc = (s) => s.replace(/\s+/g, "").length;
@@ -8103,10 +8313,13 @@ function expandToTarget(base, num, prompt) {
 }
 function proseForTarget(num, prompt) {
   // 新书不走《泊星港》正稿底稿（CHAPTER_PROSE 全是旧书人物与意象，
-  // manuscript.json 已删），改用章题 + 雾海开场句起稿，再章纲驱动扩写。
-  const base = isNewBook(prompt)
-    ? newBookChapterBase(num, prompt)
-    : readManuscript()[num] ?? CHAPTER_PROSE[num] ?? "第" + num + "章的夜比往常更沉。岑野舟守在舵位，把这一段航路的每一个浪口，又数了一遍。";
+  // manuscript.json 已删），各自用章题 + 专属开场句起稿，再章纲驱动扩写。
+  const kind = bookKind(prompt);
+  const base = kind === "book2"
+    ? new2BookChapterBase(num, prompt)
+    : kind === "book1"
+      ? newBookChapterBase(num, prompt)
+      : readManuscript()[num] ?? CHAPTER_PROSE[num] ?? "第" + num + "章的夜比往常更沉。岑野舟守在舵位，把这一段航路的每一个浪口，又数了一遍。";
   return expandToTarget(base, num, prompt);
 }
 /** 补写请求（【续写要求】）：只返回新增段落，不复述前文。 */
