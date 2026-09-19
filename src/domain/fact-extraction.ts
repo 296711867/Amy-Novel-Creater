@@ -5,10 +5,22 @@ import type { ForeshadowStatus } from "./continuity";
 import { getTemplate, renderTemplate } from "./prompt-templates";
 import type { PromptTemplateOverrides } from "./prompt-templates";
 
+// AN-002 容错补全：真实模型偶尔把 payload 本身写成一句话或数组（键级容错
+// 已有，但 payload 不是对象的场景曾把整章事实提取打挂——批次因此重试耗尽
+// 失败）。归一为 record：字符串保底进 summary，数组转 details。
+const payloadRecord = z.preprocess(
+  (value) => {
+    if (value && typeof value === "object" && !Array.isArray(value)) return value;
+    if (typeof value === "string" && value.trim()) return { summary: value.trim() };
+    if (Array.isArray(value)) return { details: value.map((item) => String(item)) };
+    return {};
+  },
+  z.record(z.string(), z.unknown()),
+);
 const proposal = z.object({
   kind: z.enum(["timeline", "character_state", "foreshadow"]),
   title: z.string().min(1),
-  payload: z.record(z.string(), z.unknown()),
+  payload: payloadRecord,
 });
 const response = z.object({ proposals: z.array(proposal).max(50) });
 export type ExtractedProposal = {

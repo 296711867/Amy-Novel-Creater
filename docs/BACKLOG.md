@@ -80,6 +80,15 @@ clamp 导致 101–120 章标题与 91–100 重复（149 个重复段首），�
 120 章标题全唯一、零旧书词汇污染。书稿导出 `书稿/灯匠与雾海-全120章-达标版.md`，
 项目包备份 `backups/灯匠与雾海.amy-novel.json`。
 
+2026-09-19～20：《万纹忍尊》真实模型（智谱 GLM-5.2 Coding Plan）120 章巡航完本。
+mock 作者模型正式退役（§AI_AUTHORING_WORKFLOW §7），Web 端切真实 API 后暴露并修复
+六处真实模型适配缺陷（AN-060），巡航 09-18 21:30 启动、09-20 03:00 收工（含全部事故
+处理），中途操作员以作者代理身份处置 7 处质量门拦截（人名错乱/时间线矛盾/场景漂移/
+字数不足重写×2/标题不符/设定矛盾），最终 251,365 字、单章 1802–2998、零章低于 1800、
+120 标题全唯一、长文段首跨章查重 0（仅 4 处短节拍句风格性复现）、英文残留 7 处已清。
+书稿导出 `书稿/万纹忍尊-真实GLM5.2-全120章.md`，项目包 `backups/万纹忍尊-真实GLM5.2.amy-novel.json`。
+
+
 ## P0：数据正确性与连续性
 
 | ID | 状态 | 事项 | 当前证据 | 完成验收 |
@@ -98,6 +107,7 @@ clamp 导致 101–120 章标题与 91–100 重复（149 个重复段首），�
 | AN-057 | [x] | 作者模型扩写器重写为章纲驱动 + 新书《灯匠与雾海》全套数据（作者模型脚本，不属产品能力） | 旧实现的 16 句模板按固定索引轮换，长章大段复读。重写为「章纲要素展开」：章纲拆事件要点，每段从五种侧面（动作/对话/环境/内心/后果）独立展开，不足时用带轮次标注的阶段要点递进补充；新书每段以「〔章题〕」开头保证跨章段首唯一。同一提交新增新书全套规划数据（BIBLE/CAST/SCENES/PERSONA/BRIEF/12 周期 structure 生成器）与 isNewBook 提示词路由，扩写素材（人名/侧面/阶段要点/底稿）按书隔离，杜绝旧书《泊星港》底稿与人名渗入新书 | 2026-09-17 实测：非流式 curl 全阶段真实 zod schema 解析通过（scenePlan/biblePlan/castPlan/structurePlan，新旧书对照）；新书巡航 120 章全书 2688 段段首跨章查重 0、零旧书词汇（10 词扫描 0 命中） |
 | AN-058 | [x] | 新书巡航三处阻断缺陷（作者模型脚本，不属产品能力） | ① NEW_BOOK_SCENES 带 `entityRef: null` 违反 `z.string().optional()`（optional 不接受 null）→ scenes 阶段解析失败触发 AN-004 修复请求，而修复提示词不含阶段触发词被 phaseOf 兜底路由到 bible，修复响应是圣经 JSON → 恒败暂停（09-14 与 09-17 两次同形失败）。删 null（省略即可）后通过。② newBookStructure 章节卷名「卷二·灯记2」与 volumes 列表「卷二·灯记2-3」不匹配，周期 2 structure 业务校验（normalizeVolumeTitle）拒绝；卷名改从 volNames 常量取，与卷列表一一对齐。③ goals/titles 只备 10 周期而全书 12 周期，周期 11/12 clamp 复用周期 10 → 第 101–120 章与 91–100 章标题全同，「〔章题〕」段首标签撞车（首跑终检 149 个重复段首）；补齐 12 条弧线后解封周期 10–12（completed→needs_revision）重放。附带：parseOutline 兼容真实提示词标签「章节大纲：/大纲：」（原正则「章纲：」恒不匹配，章纲驱动从未真正生效） | 12 周期 zod+业务校验（章数/位置/卷名/全书 120 标题唯一）全过；重放后终检：244,969 字、单章 2000–2091、12/12 周期封存、重复段首 0、标题重复 0、零旧书词汇；书稿与项目包已导出 |
 | AN-059 | [x] | 新书二《万纹忍尊》从 0 到完本（作者模型脚本，不属产品能力） | 火影×斗罗风少年升级流（番茄男频向）：九坞/兽纹/纹徒-纹神九阶/任务榜六级/蚀纹教全部原创名词，bible 边界明令禁止两部原作专有词。作者模型重构为三书路由（bookKind：old/book1/book2，brief/advisory/persona/bible/cast/scenes/structure/prose 全分支），扩写素材三套完全隔离（人名/五侧面/阶段要点/开场句/底稿），并吸取 AN-058 教训：cast 含 recurring 档（荀先生）+ 人格推荐覆盖全部 support（含沈鹫），一致性检查一次通过 | 上线前验证全绿（6 阶段 zod、12 周期业务校验、120 标题唯一、prose 查重、三书零交叉污染、IP 词零命中、前两书回归无损）；线上：createNovel→startCruise 后 wizard 十步全代签，36 分钟 12 周期零干预收工；终检 245,626 字、单章 2000–2091、2657 段查重 0、120 标题唯一；书稿与项目包已导出 |
+| AN-060 | [x] | 真实模型（GLM-5.2 Coding Plan）适配六缺陷收口 + 首次真实 API 全自动巡航完本 | 切真实 API 后连环暴露：①流式正文生成未关 thinking，GLM 推理烧尽 max_tokens 致正文 0 字（补写兜底但常截短）→ 显式 thinking:"disabled"；②生成/补写共用 maxOutputTokens=chapterWords×1.5=3000，装不下推理+正文 → +4000 推理余量；③事实提取 maxOutputTokens 1800 截断 JSON（Unterminated string）→ 6000；④④事实 JSON 偶发非法语法（引号未转义）→ 低温修复一次（AN-004 同款）；⑤parseFactExtraction 对 payload 非对象直接打挂批次 → preprocess 归一（字符串进 summary/数组转 details）；⑥AN-048 复现：Web 镜像偶发读空致 runBatch 误报「Novel or chapter not found」→ listNovels 空表延迟重读一次。另记两处待办（未修）：Web 端 sessionStorage 会话密钥在 IAB 重载/导航后丢失致 401（长跑需值守重填）；重写后残留 candidate_ready 僵尸任务与「最新候选必须 accepted」封存门互锁，需人工清理解锁 | 2026-09-20 真实 API 实测完本：120/120 章入正史、12/12 周期封存；251,365 字、单章 1802–2998、零章<1800、标题全唯一、长文段首查重 0、英文残留清零（7 处）；全程质量门/提案/封存链路真实数据走通；书稿与项目包已导出；pnpm check 256 项全绿 |
 | AN-055 | [x] | 连读页点目录章节跳回首页，无法正常阅读 | 2026-09-13 用户实测：目录用裸锚点 href="#book-ch-N"，应用是 HashRouter（路由存于 # 后），点击后被解析为路由 book-ch-N → 匹配不到 → 通配路由 Navigate 回首页。AN-031 引入连读页即存在。修复：目录点击 preventDefault + scrollIntoView 滚动定位（正文 article 的锚点 id 保留）| tests/web/book-reader-toc.test.tsx 回归：目录点击 preventDefault、scrollIntoView 调用、路由不跳转；pnpm check 255 项通过 |
 | AN-054 | [x] | 巡航重放三处复审修正（代码审查自纠） | ①AN-052 等待窗口误用 run.updatedAt 作基准（completed 分支时已被终态更新推到刚刚，防护恒跳过）→ 改 run.createdAt；②AN-050 把被新稿取代的旧候选残留建议也接受进正史（被放弃草稿的事实污染正史）→ 按候选内容与正史一致性分流：一致接受、取代拒绝；③startCruise 无条件清运行索引会抹掉作者手动 Autopilot 的在途运行 → 仅在无 running/paused 运行时清理 | pnpm check 254 项通过、双端生产构建通过 |
 | AN-053 | [x] | 重放场景缺「清运行索引」产品动作，旧运行误导巡航进度 | 2026-09-13 实测：重放已封存周期前必须手工删运行索引，且内存镜像在平台写入路径下会回填已删数据。修复：新增 PlatformPort.clearWorkflowRuns（Web remove 写穿 / Electron workflow_runs.clear SQL）+ store.clearWorkflowRuns 动作；startCruise 启动时自动清理（运行索引不是正史，批次/候选/正史/审计不受影响）| 双端实现 + 类型贯通；pnpm check 254 项通过；重放 61–120 实测巡航按新链路运转 |

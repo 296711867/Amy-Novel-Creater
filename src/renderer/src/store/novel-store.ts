@@ -1725,8 +1725,12 @@ export const useNovelStore = create<NovelState>((set, get) => ({
             ? currentBatch.policy.outputTokenBudget -
               currentBatch.outputTokensUsed
             : 0,
+          // 思考型模型（如 GLM coding 端点）会在 max_tokens 预算内先消耗推理
+          // 再吐正文（线上形态：3000 tokens 全是推理、正文 0 字，补写也被
+          // 截到 1646 字过不了 90% 门）。正文生成与补写共用此上限，给推理
+          // 留固定余量；非思考模型多出的预算只是上限，不会多花费用。
           output = Math.min(
-            Math.ceil(batch.policy.chapterWords * 1.5),
+            Math.ceil(batch.policy.chapterWords * 1.5) + 4000,
             profile.contextWindow - 4000,
             remaining,
           );

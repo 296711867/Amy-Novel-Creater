@@ -704,7 +704,15 @@ export const webPlatform: PlatformPort = {
     return novel;
   },
   async listNovels() {
-    return readNovels();
+    // AN-048：Web 内存镜像偶发读空（IndexedDB 装载竞态）且此前不重试，
+    // runBatch 的 buildContext 直接以「Novel or chapter not found」误杀整批。
+    // 装载结果为空时延迟重读一次——真没有作品时只多一次空读。
+    let novels = readNovels();
+    if (novels.length === 0) {
+      await new Promise((resolve) => setTimeout(resolve, 600));
+      novels = readNovels();
+    }
+    return novels;
   },
   async deleteNovel(id: string) {
     const chapters = read<Chapter[]>(chaptersKey(id), []),
@@ -1632,6 +1640,10 @@ export const webPlatform: PlatformPort = {
             maxOutputTokens: input.maxOutputTokens,
             temperature: input.temperature,
             stream: true,
+            // GLM 等思考型模型默认开推理，会先烧掉 max_tokens 再吐正文
+            // （线上形态：输出 3000 tokens 正文 0 字，全靠补写兜底）。正文
+            // 生成不需要思维链，显式关闭。
+            thinking: "disabled",
           }),
         ),
       },
@@ -1736,7 +1748,8 @@ export const webPlatform: PlatformPort = {
           profile,
           key,
           chapterReviewPrompt(chapter.outline || "暂未填写", input.content),
-          1200,
+          // 审查 JSON 带证据引文，1200 tokens 偶发截断；提高余量。
+          3000,
           0.1,
         );
         findings.push(...parseChapterReview(result.content));
@@ -1776,20 +1789,38 @@ export const webPlatform: PlatformPort = {
           profile,
           key,
           factExtractionPrompt(input.content),
-          1800,
+          // 事实提取 JSON 常有 2-4 千字，1800 tokens 会把 JSON 从中截断
+          // （线上形态：Unterminated string at 3947 → 批次重试耗尽失败）。
+          6000,
           0.1,
         );
-        const proposals = parseFactExtraction(result.content).map<FactProposal>(
-          (item) => ({
-            ...item,
-            id: nanoid(),
-            candidateId: input.candidateId,
-            chapterId: input.chapterId,
-            status: "proposed",
-            createdAt: now,
-            updatedAt: now,
-          }),
-        );
+        // AN-004 同款思路：真实模型偶发输出非法 JSON（截断/引号未转义），
+        // 直接判死会让整章白生成 3 次。低温修复一次；仍失败才按原语义抛错。
+        let extracted: ReturnType<typeof parseFactExtraction>;
+        try {
+          extracted = parseFactExtraction(result.content);
+        } catch (parseError) {
+          const repaired = await requestWebPlanning(
+            profile,
+            key,
+            "以下是一次小说事实提取的模型输出，JSON 存在语法错误（" +
+              String(parseError instanceof Error ? parseError.message : parseError) +
+              "）。请只输出修复后的合法 JSON（结构不变：{\"proposals\":[...]}），不要输出任何解释：\n" +
+              result.content.slice(0, 9000),
+            6000,
+            0.1,
+          );
+          extracted = parseFactExtraction(repaired.content);
+        }
+        const proposals = extracted.map<FactProposal>((item) => ({
+          ...item,
+          id: nanoid(),
+          candidateId: input.candidateId,
+          chapterId: input.chapterId,
+          status: "proposed",
+          createdAt: now,
+          updatedAt: now,
+        }));
         write(proposalsKey(input.candidateId), proposals);
         await this.saveUsage({
           novelId: input.novelId,
