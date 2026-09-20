@@ -93,6 +93,7 @@ AMY_E2E_REAL=1 npx vitest run tests/e2e/rolling-cycle.e2e.test.ts
 - [真实 API 闭环评估报告](docs/E2E_ROLLING_CYCLE.md)
 - [AI 全自动小说工作流设计](docs/AUTOPILOT_DESIGN.md)
 - [AI 全自动小说工作流与验收门槛](docs/AUTOPILOT_WORKFLOW.md)
+- [AI 主笔工作流实录与真实模型制作手册](docs/AI_AUTHORING_WORKFLOW.md)（§8：真实模型从 0 到完本操作手册）
 - [Windows 发布说明](docs/RELEASE.md)
 - [发布验收报告](docs/ACCEPTANCE_REPORT.md)
 

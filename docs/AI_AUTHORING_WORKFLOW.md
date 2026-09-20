@@ -415,3 +415,146 @@ scripts/author-runner.mjs（新，实验性）
   清理（建议：任务改指最新候选后自动收敛）。
 - 导出：`书稿/万纹忍尊-真实GLM5.2-全120章.md`、
   `backups/万纹忍尊-真实GLM5.2.amy-novel.json`。
+
+## 8. 真实模型全自动制作一本书：操作手册（Playbook）
+
+> 2026-09-20 由《万纹忍尊》首次真实 API 全程实战沉淀（AN-060）。
+> 适用场景：Web 端 + 智谱 GLM Coding Plan（或任意 OpenAI 兼容真实模型），
+> 从 0 到 120 章完本 + 导出 + 提交。下一本书照本宣科即可。
+
+### 8.0 前置检查清单（开跑前 5 分钟）
+
+1. **模型档**：设置页确认默认档为真实模型（如「智谱 GLM（Coding Plan 订阅）」，
+   `open.bigmodel.cn/api/coding/paas/v4`），Key 已填（Web 端 Key 存 sessionStorage，
+   见 8.5 故障 #1）。有「测试连接」结果成功。
+2. **mock 服已死**：`curl http://127.0.0.1:8991` 必须拒绝连接（作者模型已退役，
+   谁再起 8991 就是在造 mock 书）。
+3. **桥接文件**：`cp scripts/dev-helpers/__*.js public/`（public/ 不存在则先 mkdir）。
+4. **dev 服务器**：`pnpm dev:web` 后台起（5173）；长跑建议用守护循环
+   （vite 偶发自退，见 8.5 故障 #7）：
+   `while true; do pnpm dev:web >> .tmp-vite.log 2>&1; sleep 3; done &`
+5. **浏览器**：ZCode 内置浏览器开 `http://localhost:5173`，**整个巡航期间
+   标签页保持打开、不导航、不刷新**（否则 Key 丢 + 巡航断）。
+6. **费用确认**：真实 API 按量计费，一本书（120 章 × 2000 字）实测消耗
+   数百万 tokens，开跑前确认账户额度。
+
+### 8.1 建书与开跑（2 分钟）
+
+浏览器 DevTools 或自动化脚本在页面上下文执行（桥接已就位）：
+
+```js
+// 1) 建书（premise 决定全书走向，写足卖点/矛盾/结局方向）
+const novel = await store.getState().createNovel({
+  title: "书名", genre: "玄幻",
+  premise: "世界观 + 主角 + 金手指 + 主线矛盾 + 结局方向 + 平台节奏要求",
+  targetChapters: 120, chapterWords: 2000, cycleSize: 10,
+});
+// 2) 开巡航（目标=总章数；wizard 十步由巡航自动代签）
+await store.getState().startCruise(novel.id, 120);
+// 3) 装心跳（绕过后台节流；每次页面刷新后需重装）
+const w = new Worker("/__tick_worker.js");
+w.onmessage = () => {
+  const s = window.__store.getState();
+  try { void s.tickCruise(novel.id); } catch (e) {}
+  try { void s.tickAutoReview(novel.id); } catch (e) {}
+};
+w.postMessage({ cmd: "start", ms: 2000 });
+window.__driver = w;
+```
+
+### 8.2 监控节奏与判读（每 5–10 分钟一查）
+
+读状态三件套：`cruise[记录].status/message`、accepted 章数
+（`chapters` 过滤 novelId + status==="accepted"）、最新批次状态。
+注意 store 的 chapters/workflowRuns/planningCycles 是**对象不是数组**，
+用 `Object.values(x ?? {}).flat()` 展开。
+
+| 周期形态 | 正常耗时 | 判读 |
+| --- | --- | --- |
+| 规划（structure 阶段） | 2–6 分钟 | message 含「本轮检查耗时较长」即正常等待 |
+| 生成 10 章 | 15–25 分钟 | 批次事件「候选稿已保存：N 字」逐章推进 |
+| 自动接受入正史 | 生成完稍滞后 | accepted 追到本周期 +10 即收齐 |
+| 封存 + 下一周期 | 1–3 分钟 | 「第 X–Y 章已封存，开始规划…」 |
+
+**120 章全程实测约 5.5 小时**（含事故处置；纯净跑约 4 小时）。
+
+### 8.3 恢复套餐（巡航暂停时的标准动作）
+
+巡航 paused 时先读 `cruise.message` 定类，再执行对应套餐。所有套餐都先
+「重挂桥接/心跳」（页面可能已重载），统一收尾 `resumeCruise`（cruise 条目
+不存在则 `startCruise(novelId, 120)`）。
+
+**通用前置**：Key 检查（8.5 #1）→ `testModelConnection`（注意读返回体
+`result.ok`，它不抛错！）→ 取消 failed 批次（`setBatchStatus(id,"cancelled")`）
+→ 处理 pending 提案 → `clearWorkflowRuns` → resume。
+
+**提案批处理**（pause 原因含「设定提案」）：
+```js
+for (const p of pendingProposals) {
+  try { await s.reviewPlanningProposal(novelId, p.id, true); }   // 先试接受
+  catch { try { await s.reviewPlanningProposal(novelId, p.id, false); } catch {} } // 重名等再拒
+}
+```
+
+**质量门 error**（pause 原因含「error 级检查问题」）：读该章最新候选的
+findings（`platform.listFindings`）分三类处置：
+- **可文本修复**（人名错乱/编号/时间线数字/英文残留）→ 定位锚点后
+  `editCandidateContent` 精确替换 + `updateFinding(id,"resolved")`；
+- **字数/情节性问题** → `setBatchStatus(batchId,"running")` +
+  `regenerateGenerationJob(batchId, jobId, "修订要求…")`（修订要求要具体：
+  目标字数、必须用的人名、场景）；
+- **计划与正文哪个对**：正文更好就改计划对齐正文，反之改正文——
+  `updateChapterPlan({chapterId, volumeId, title, outline, targetWords})`。
+- 处置完 `setAutoReview(novelId, true, "处置说明")` 再 resume。
+
+**僵尸任务清理**（pause 原因含「仍有待审候选」但实际已全部入正史）：
+遍历所有批次任务，`chapter.status==="accepted"` 且任务仍 candidate_ready 的，
+`platform.updateGenerationJob(job.id, "completed", { candidateId: 已接受候选id })`。
+（根因与产品化建议见 8.5 #5。）
+
+### 8.4 收工终检 + 导出（30 分钟）
+
+**终检**（全 accepted 章节上跑）：
+1. 字数：每章 ≥1800（0 章低于即达标）；
+2. 跨章段首 30 字查重：长文（≥8 个汉字）段首应 0 重复；短节拍句
+   （「——」「饿。」类）允许，甄别标准是长度；
+3. 标题唯一性 120/120；
+4. 英文残留：正则 `[A-Za-z]{2,}` 扫描，合法实体引用（E-XXX 编号）除外，
+   其余用 `reviseChapterContent(chapterId, 查询词, 替换词)` 逐章清除。
+
+**导出**（页面上下文，大文件分块拉取）：
+1. 书稿：注入 `__export_bridge.js` → `novelAsMarkdown(novel, chapters)` 存
+   `window.__mdText` → 按 120k 字符 slice 分块拉回 → 写
+   `书稿/<书名>-<模型标识>-全<章数>章.md`；
+2. 项目包：`buildProjectBundle(novelId)` → JSON.stringify → 分块拉回 →
+   写 `backups/<书名>-<模型标识>.amy-novel.json`（backups/ 已 gitignore）。
+
+**收尾**：停心跳 → 删 `window.__store/__platform/__NOVEL/__mdText/__bundleJson` →
+删 `public/` 全目录 → 停 vite 守护 → BACKLOG 记任务 ID + 结论段 →
+`pnpm check` 全绿 → 书稿与文档一并提交推送。
+
+### 8.5 已知故障与状态（真实 API 实战全录）
+
+| # | 故障 | 根因 | 处置 | 状态 |
+| --- | --- | --- | --- | --- |
+| 1 | 全请求 401，批次重试耗尽暂停 | Web 端 Key 存 sessionStorage，IAB 重载/导航即丢 | 重存 Key（saveModelProfile 带 apiKey）后照常；**测试连接要读返回体 ok 字段，它不抛错** | 已有绕行；产品化建议：巡航中密钥丢失前置提示/引导重填 |
+| 2 | 正文 0 字（输出 N 千 tokens） | GLM coding 端点在 max_tokens 内先推理后正文 | AN-060 修复：流式生成显式 `thinking:"disabled"` | ✅ 已修 |
+| 3 | 补写后仍不足 1800 字门 | 生成/补写共用 `chapterWords×1.5=3000` 预算 | AN-060 修复：+4000 推理余量 | ✅ 已修 |
+| 4 | 事实提取 JSON 截断（Unterminated string） | 预算 1800 < JSON 实际 2–4k 字 | AN-060 修复：6000 + 低温修复一次 | ✅ 已修 |
+| 5 | 批次整批失败：payload 校验 | 模型把 payload 写成非对象 | AN-060 修复：preprocess 归一 | ✅ 已修 |
+| 6 | 批次误报「Novel or chapter not found」 | AN-048 镜像偶发读空 | AN-060 修复：listNovels 空表延迟重读 | ✅ 已修 |
+| 7 | vite 偶发自退，页面失联连锁丢 Key | dev 服务器稳定性 | 守护循环拉起（8.0 #4）；重载后重装桥接+Key | 已有绕行 |
+| 8 | 「仍有待审候选」暂停但全部已入正史 | 重写残留 candidate_ready 僵尸任务 × 封存门「最新候选须 accepted」互锁 | 8.3 僵尸清理套餐；或人工代封周期（completed + actualClosingState）后清运行续跑 | 已有绕行；产品化建议：任务自动改指最新候选后收敛 |
+| 9 | 提案「找不到要更新的设定」连败 3 次自停 | 模型 update 提案 targetName 带括号注释对不上实体 | 拒绝该提案 + 手工删除重复实体后重规划 | 已有绕行；产品化建议：提案名匹配归一化 |
+| 10 | 周期弧线撞车（mock 时代遗留教训） | 每周期标题若非全书唯一，段首标签跨章重复 | 真实模型自拟标题无此问题；mock 路由数据须 12 弧线齐备 | 仅 mock 相关 |
+
+### 8.6 文件地图（一本书的完整产物）
+
+| 路径 | 内容 |
+| --- | --- |
+| `书稿/<书名>-<模型>-全N章.md` | 全书 Markdown（novelAsMarkdown，导出头+分章） |
+| `backups/<书名>-<模型>.amy-novel.json` | 完整项目包（设定/正史/候选/审查/用量，可 #/data 页恢复；gitignore） |
+| `scripts/amy-author-model.mjs` | mock 作者模型（已退役；泊星港/灯匠与雾海/万纹忍尊 mock 版数据留存备查） |
+| `scripts/dev-helpers/` | 巡航桥接四件套 + 说明（复制到 public/ 使用） |
+| `docs/BACKLOG.md` | 每本书的任务 ID、结论段与缺陷收口记录 |
+| `docs/AI_AUTHORING_WORKFLOW.md` | 本手册 + 各书实跑记录（§5 mock 时代 / §7 切换 / §8 手册） |
