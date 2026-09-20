@@ -501,6 +501,56 @@ describe("全自动巡航（AN-035）", () => {
     backend.candidates = backend.candidates.filter((item) => item.id !== "cd-new");
   });
 
+  it("僵尸草稿不与封存门互锁：章节已入正史且悬空稿创建于本轮之前 → 照常封存", async () => {
+    // 线上形态（真实 API 长跑）：c21 已入正史，但前几轮在本轮开始前留下
+    // candidate 状态悬空稿。它不属于本轮产出、永远等不到被本轮接受——
+    // 原实现计入 pending 与自动接受互锁，需人工清任务解锁。
+    seedRun({});
+    seedChapters(21, 30, "accepted");
+    seedCycle(21, 30, "generating");
+    backend.batches.push({
+      id: "b-seed",
+      novelId: "n1",
+      status: "completed",
+      policy: policy(21, 30),
+      outputTokensUsed: 100,
+      awaitingReview: false,
+      createdAt: backend.now,
+      updatedAt: backend.now,
+    });
+    backend.jobsOverride = [
+      { id: "j1", batchId: "b-seed", chapterId: "c21", position: 1, status: "completed", candidateId: "cd1", attempt: 0, error: "", createdAt: backend.now, updatedAt: backend.now },
+    ];
+    backend.candidates.push({
+      id: "cd-stale",
+      novelId: "n1",
+      chapterId: "c21",
+      profileId: "p1",
+      contextHash: "h",
+      content: "前几轮遗留的悬空稿。",
+      wordCount: 2000,
+      status: "candidate",
+      inputTokens: 1,
+      outputTokens: 1,
+      cachedTokens: 0,
+      createdAt: "2026-08-01T00:00:00.000Z",
+      updatedAt: "2026-08-01T00:00:00.000Z",
+    });
+    store.setState({
+      cruise: { n1: { enabled: true, status: "active", targetChapter: 30, message: "", updatedAt: backend.now } },
+      autoReview: { n1: { enabled: true, message: "" } },
+    });
+    try {
+      await store.getState().tickCruise("n1");
+      // 悬空稿不拦截：周期照常封存（目标 30 已达 → 收工），而非
+      // 「新稿入正史中：还有 1 章候选待自动接受」原地等待。
+      expect(backend.calls.savePlanningCycle.length).toBeGreaterThanOrEqual(1);
+    } finally {
+      backend.jobsOverride = null;
+      backend.candidates = backend.candidates.filter((item) => item.id !== "cd-stale");
+    }
+  });
+
   it("运行失败 → 巡航暂停并记录原因（不自动重试）", async () => {
     seedRun({ status: "failed", error: "模型余额不足" });
     store.setState({ cruise: { n1: { enabled: true, status: "active", targetChapter: 40, message: "", updatedAt: backend.now } } });

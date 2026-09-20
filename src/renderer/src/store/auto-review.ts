@@ -153,6 +153,39 @@ export function createAutoReviewActions(set: NovelStateSet, get: NovelStateGet) 
         });
         if (event) get().appendActivity(event);
       };
+      // 僵尸任务自愈（真实 API 长跑线上形态：多轮运行/重写后任务残留
+      // candidate_ready，指向带过审 error 发现的旧候选，而该章其实已由
+      // 别的候选入正史）。自动接受会被旧候选的发现钉死自停，与巡航封存
+      // 门互锁（本章已入正史却报「仍有待审候选」暂停，需人工清理任务）。
+      // 判别：任务指向的候选创建于本批次开始之前（前几轮的悬空稿）才算
+      // 僵尸；本批次内的新稿（重放/重写场景）照常走下方 AN-049 流程，
+      // 不受影响。
+      if (ready?.chapterId) {
+        const chapter = (await platform.listChapters(novelId)).find(
+          (item) => item.id === ready.chapterId,
+        );
+        if (chapter?.status === "accepted") {
+          const chapterCandidates = await platform.listChapterCandidates(
+            chapter.id,
+          );
+          const pointed = chapterCandidates.find(
+            (item) => item.id === ready.candidateId,
+          );
+          if (pointed && pointed.createdAt < active.createdAt) {
+            const acceptedCandidate = chapterCandidates.find(
+              (item) => item.status === "accepted",
+            );
+            await platform.updateGenerationJob(ready.id, "completed", {
+              ...(acceptedCandidate ? { candidateId: acceptedCandidate.id } : {}),
+            });
+            await emit(
+              chapter.id,
+              `第 ${chapter.position} 章已入正史，自动收尾残留任务并继续。`,
+            );
+            return;
+          }
+        }
+      }
       // 以数据库为准（缓存可能停留在旧状态）：线上形态为缓存说“待审”、
       // 实际已接受 → 反复 accept 被“already reviewed”拒绝，连续失败自停，
       // 与巡航的重拉形成互搏死循环。

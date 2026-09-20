@@ -456,6 +456,10 @@ export function createCruiseActions(set: NovelStateSet, get: NovelStateGet) {
       if (run.batchId) {
         const batchJobs = await get().loadJobs(run.batchId);
         const pendingNew: number[] = [];
+        // 僵尸草稿判别用：章节 → 正史状态
+        const chapterStatusById = new Map(
+          rangeChapters.map((item) => [item.id, item.status]),
+        );
         // AN-052：等待窗口。本批次生成的新候选可能晚于上一次检查落库
         // （生成中检查不到 → 检查完落库 → 封存直接冲线）。凡任务在本轮
         // 运行期间被更新过（job.updatedAt ≥ run.createdAt）的章节，其
@@ -468,13 +472,27 @@ export function createCruiseActions(set: NovelStateSet, get: NovelStateGet) {
           const all = await platform.listChapterCandidates(item.chapterId);
           const newest = all[0];
           if (newest?.status === "candidate") {
-            pendingNew.push(item.position);
+            // 僵尸草稿（真实 API 长跑线上形态）：章节已入正史，但历史上
+            // 多轮运行/重写在本轮开始前留下过 candidate 状态的悬空稿。
+            // 它不属于本轮产出（createdAt < runStart），永远等不到被本轮
+            // 接受——计入 pending 会与自动接受互锁，整周期卡在「仍有待审
+            // 候选」。本轮内的新稿（重放/重写）不受影响，仍照常等待。
+            const staleDraft =
+              chapterStatusById.get(item.chapterId) === "accepted" &&
+              new Date(newest.createdAt).getTime() < runStart;
+            if (!staleDraft) pendingNew.push(item.position);
             continue;
           }
           if (
             new Date(item.updatedAt).getTime() >= runStart &&
             newest &&
-            newest.status !== "accepted"
+            newest.status !== "accepted" &&
+            // 已拒绝的草稿是已决断状态：正史以已接受稿为准，不算待审。
+            // 原条件把「最新候选=rejected 的重写残留」也计入 pending，与
+            // 自动接受互锁（线上形态：全部入正史后仍报「仍有待审候选」
+            // 暂停，需人工清理任务才能解锁）。未入正史的章节另有下方
+            // acceptedCount 门禁兜底，不会带病冲线。
+            newest.status !== "rejected"
           ) {
             pendingNew.push(item.position);
           }

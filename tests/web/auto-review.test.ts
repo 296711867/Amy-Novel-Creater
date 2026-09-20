@@ -777,6 +777,55 @@ describe("自动审阅（AN-026）", () => {
     backend.jobs[0].candidateId = "cd1";
   });
 
+  it("僵尸任务自愈：章节已入正史且任务指向本批次前的旧候选 → 收尾任务不停机", async () => {
+    // 线上形态（真实 API 长跑）：多轮运行/重写后任务残留 candidate_ready，
+    // 指向带 error 发现的旧候选，而该章已由别的候选入正史。自动接受原先
+    // 被旧候选的发现钉死自停，与巡航封存门互锁。
+    backend.chapters[0].status = "accepted";
+    backend.jobs[0].candidateId = "cd-zombie";
+    backend.candidates[0].status = "accepted"; // cd1 = 已入正史的正稿
+    backend.candidates.unshift({
+      id: "cd-zombie",
+      novelId: "n1",
+      chapterId: "c1",
+      profileId: "p1",
+      contextHash: "h",
+      content: "前几轮遗留的旧稿。",
+      wordCount: 2000,
+      status: "candidate",
+      inputTokens: 1,
+      outputTokens: 1,
+      cachedTokens: 0,
+      createdAt: "2026-08-01T00:00:00.000Z",
+      updatedAt: "2026-08-01T00:00:00.000Z",
+    });
+    backend.findings.push({
+      id: "f-zombie",
+      candidateId: "cd-zombie",
+      chapterId: "c1",
+      severity: "error",
+      status: "open",
+      message: "旧稿遗留 error",
+      evidence: "",
+      createdAt: backend.now,
+      updatedAt: backend.now,
+    });
+    enableAuto();
+    await store.getState().tickAutoReview("n1");
+    // 收尾任务并改指已接受候选；不尝试接受任何候选；不自停
+    const heal = backend.calls.updateGenerationJob.find(
+      (call: { status: string; patch?: { candidateId?: string } }) =>
+        call.status === "completed" && call.patch?.candidateId === "cd1",
+    );
+    expect(heal).toBeTruthy();
+    expect(backend.calls.acceptAttempts).toHaveLength(0);
+    expect(store.getState().autoReview["n1"]?.enabled).toBe(true);
+    backend.candidates = backend.candidates.filter(
+      (item) => item.id !== "cd-zombie",
+    );
+    backend.jobs[0].candidateId = "cd1";
+  });
+
   it("AN-028 持久化：开关写入 localStorage，刷新/重启后可断点续跑", () => {
     store.getState().setAutoReview("n1", true, "已开启");
     expect(
