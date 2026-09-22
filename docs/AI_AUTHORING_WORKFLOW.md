@@ -11,17 +11,13 @@
 
 | 项 | 值 |
 | --- | --- |
-| 作品 | 泊星港：禁航之海的少年船长（novelId `0S746TcrnwsqS9fPvlZWA`） |
-| 章节 | 120/120 章全部入正史，卷一~卷三完整闭环 |
-| 总字数 | 97,840（扩写进行中，目标 2400 字/章 ≈ 288K） |
-| 人物/时间线/伏笔/角色状态 | 18 名 / 97 条 / 74 条 / 66 条 |
-| 数据位置 | 浏览器 IndexedDB（`amy-novel` 库 kv store，键 `amy-novel:*`） |
-| 备份 | 工作区 `backups/` 共 6 份，最新 `boxport-backup-v6-expanded.json` |
-| 创作引擎 | `scripts/amy-author-model.mjs`（本地 8990 端口，含全部策划包+正文+事实提案） |
-| 剩余工作 | 第 31–70 章扩至 2000+；71–120 章二次深化；11–30 章冲刺 2400 |
-
-各章字数分布（2026-09-07 实测）：1–10 平均 2219；11–20 平均 1551；21–30 平均 817（已增强）；
-31–70 平均 615–800；71–120 平均约 450–510（骨架已救活）。
+| 已完本 | 4 本（各 120/120 章入正史、12/12 周期封存）：①《泊星港》巡航版（mock，242,437 字）；②《灯匠与雾海》（mock，达标版）；③《万纹忍尊》（真实 GLM-5.2，251,365 字，§7.4）；④《泊星港（真实重制版）》（真实 GLM-5.2，260,293 字，§7.5，novelId `AHnIo0LCrnLUaKkNnvQee`） |
+| 书稿 | `书稿/*-全120章*.md`（最新：`泊星港-真实GLM5.2-全120章.md`） |
+| 项目包 | `backups/*.amy-novel.json`（#/data 页可恢复；gitignore） |
+| 当前引擎 | 真实 API：智谱 GLM-5.2（Coding Plan），`open.bigmodel.cn/api/coding/paas/v4`；本地 mock 作者模型（8991）已退役，勿复活 |
+| 新书路径 | 照 §8 手册执行（前置清单 → 建书开跑 → 监控 → 恢复套餐 → 终检导出） |
+| 故障速查 | §8.5 全录 14 条（#1 Key 丢失最高频、#11 IAB 回收自愈、#12 实体类型错位、#13 重派悬空稿） |
+| 数据位置 | 浏览器 IndexedDB（`amy-novel` 库 kv store，键 `amy-novel:*`）；Web 端 API Key 存 sessionStorage（IAB 重载即丢，§8.5 #1） |
 
 ---
 
@@ -416,6 +412,25 @@ scripts/author-runner.mjs（新，实验性）
 - 导出：`书稿/万纹忍尊-真实GLM5.2-全120章.md`、
   `backups/万纹忍尊-真实GLM5.2.amy-novel.json`。
 
+### 7.5 《泊星港（真实重制版）》续跑完本记录（2026-09-22）
+
+**novelId `AHnIo0LCrnLUaKkNnvQee`，真实 GLM-5.2 全程，自 10/120 干净暂停点续跑至 120/120 完本（12/12 周期封存，巡航自动收工）。**
+
+- 成果：260,293 字、单章最短 1903（零低于 1800 门）、120 标题全唯一、
+  长文（≥15 字）段首跨章查重仅 1 处（77/78 章交界悬崖回声句，风格性保留）、
+  正史英文残留 0（8 处已清：fog/glove/Morse/slow/gloves×2/wash/heat）。
+- 质量门实战 7 次：字数+情节偏离（45 章）、视角越界+人物替换（53 章）、
+  视角+距离设定矛盾（64 章）、人物混淆+字数（117 章）→ 均带具体修订要求
+  重写过关；计划与自家章节标题矛盾（89 章《断骨吐链》：大纲说天枢阁藏核，
+  正文是断桅之骨吞核）→ 按「正文更好」改计划对齐正文；计数矛盾（96 章
+  预警船遗骸七→十二，含首舰+余船算术同步）→ editCandidateContent 文本修复；
+  结尾视角越界（118 章）→ 沈观澜内心戏改写为远镜可观察画面+灯语（私令
+  改为「认不出的私话灯号」保留悬念）。
+- 值守强度对比：万纹忍尊纯净跑，本轮 IAB 空闲回收页面 6 次（见 8.5 #11），
+  全靠 ≤5 分钟探测节奏 + 标准自愈套餐（8.3）扛住，未损失任何周期。
+- 导出：`书稿/泊星港-真实GLM5.2-全120章.md`（262,758 字符）、
+  `backups/泊星港-真实GLM5.2.amy-novel.json`（2.9MB，120 章/282 候选）。
+
 ## 8. 真实模型全自动制作一本书：操作手册（Playbook）
 
 > 2026-09-20 由《万纹忍尊》首次真实 API 全程实战沉淀（AN-060）。
@@ -512,6 +527,23 @@ findings（`platform.listFindings`）分三类处置：
 `platform.updateGenerationJob(job.id, "completed", { candidateId: 已接受候选id })`。
 （根因与产品化建议见 8.5 #5。）
 
+**IAB 页面重载自愈套餐**（值守探测发现 `window.__store` 消失即执行，8.5 #11）：
+
+```js
+// 1) 重注入桥接（module script）→ 等 2s；
+// 2) Key 丢失则重存：loadModelProfiles → saveModelProfile({...profile, apiKey})；
+// 3) 重装 __tick_worker 心跳（Worker 不随重载存活）；
+// 4) 读 cruise 记录：批次空壳/failed → setBatchStatus(id,"cancelled")；
+//    有失败运行 → clearWorkflowRuns(novelId)；
+// 5) setAutoReview(nid, true, "重载自愈") + resumeCruise(nid)。
+```
+
+配套操作纪律：值守探测 ≤5 分钟一次（探测内容：`typeof window.__store`、
+cruise status/message、acceptedCount、心跳、sessionStorage Key 长度）；
+重派悬空稿（8.5 #13）在已入正史章节上出现 status==="candidate" 的新稿时，
+用 `rejectChapterCandidate` 拒绝冗余稿而非删除——rejected 是已决断态，
+不算待审，封存门放行。
+
 ### 8.4 收工终检 + 导出（30 分钟）
 
 **终检**（全 accepted 章节上跑）：
@@ -547,6 +579,10 @@ findings（`platform.listFindings`）分三类处置：
 | 8 | 「仍有待审候选」暂停但全部已入正史 | 重写残留 candidate_ready 僵尸任务 × 封存门「最新候选须 accepted」互锁 | **AN-061 已根治**：自动接受自愈僵尸任务（指向本批次前旧稿且章节已入正史→收尾+改指）、巡航判定排除本轮前悬空稿与已拒稿；8.3 清理套餐保留作兜底 | ✅ 已修（AN-061，含双回归测试） |
 | 9 | 提案「找不到要更新的设定」连败 3 次自停 | 模型 update 提案 targetName 带括号注释对不上实体 | 拒绝该提案 + 手工删除重复实体后重规划 | 已有绕行；产品化建议：提案名匹配归一化 |
 | 10 | 周期弧线撞车（mock 时代遗留教训） | 每周期标题若非全书唯一，段首标签跨章重复 | 真实模型自拟标题无此问题；mock 路由数据须 12 弧线齐备 | 仅 mock 相关 |
+| 11 | IAB 标签页空闲被系统回收（泊星港实测 6 次/轮），桥接/Key/心跳全丢 | WebView2 后台/空闲回收；重载窗口内若批次在途 → 401 连锁或派发中断 | 标准自愈套餐（8.3 末尾）：重注入桥接 → saveModelProfile 重存 Key → 重装 __tick_worker → 空壳/failed 批次 setBatchStatus cancelled → clearWorkflowRuns → resumeCruise；值守探测 ≤5 分钟一次可在单周期内恢复 | 已有绕行；值守探测节奏是关键 |
+| 12 | 「找不到要更新的设定」但实体同名存在（归航钉、第十三颗之谶） | add 提案按 term 建实体、后续 update 提案按 item+ref 寻址，resolveStoryEntity 要求 type 严格相等 → 双双失配 | `saveStoryEntity({...ent, type:"item"})` 把实体类型对齐提案后接受提案（item 语义通常更准） | 已有绕行；产品化建议：ref 命中时放宽 type 严格相等 |
+| 13 | 重载后巡航把已封存周期整段重派（41–50 章），47 份新候选悬空卡死封存门 | AN-061 自愈只覆盖「指向本轮开始前旧稿」；本轮内重派的新稿仍算待审 | 对已入正史章节上 status==="candidate" 的重派稿逐一 `rejectChapterCandidate`（rejected 是已决断态不算待审）+ `updateGenerationJob(id,"completed",{candidateId:已接受候选})` | 已有绕行；产品化建议：批次派发前按章节正史状态过滤 |
+| 14 | updateFinding 直接调 platform 层后自动接受仍见 error open | 平台层写成功但不刷 store 缓存，tick 读的是 store | findings 一律走 store 动作 `updateFinding(candidateId, findingId, "resolved")`（双层同步） | ✅ 认知修正（操作纪律，非缺陷） |
 
 ### 8.6 文件地图（一本书的完整产物）
 
