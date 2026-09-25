@@ -224,6 +224,20 @@ vi.mock("@renderer/platform/web-platform", () => ({
       backend.calls.startBackgroundBatch.push(batchId);
       return Promise.resolve();
     },
+    // AN-062①：saveChapter 落库并返回新对象（镜像平台层语义）。
+    saveChapter: (input: {
+      chapterId: string;
+      title: string;
+      outline: string;
+      content: string;
+    }) => {
+      const chapter = backend.chapters.find((c) => c.id === input.chapterId)!;
+      chapter.title = input.title;
+      chapter.outline = input.outline;
+      chapter.content = input.content;
+      chapter.wordCount = input.content.replace(/\s+/g, "").length;
+      return Promise.resolve({ ...chapter });
+    },
   },
 }));
 
@@ -396,5 +410,27 @@ describe("Renderer 关键流程（store）", () => {
     // 恢复共享后台状态，保证用例独立。
     backend.batches = backend.batches.filter((item) => item.id !== "b-old");
     backend.jobs = backend.jobs.filter((item) => item.batchId !== "b-old");
+  });
+
+  it("全局修订单章（AN-062①）：修订落库后 store chapters 缓存立即可见，无需重载", async () => {
+    // 线上形态（《灯匠与雾海（真实重制版）》终检值守）：页面已加载过章节
+    // （缓存存在），reviseChapterContent 落库成功，但尾部 loadChapters 被
+    // 「已加载即跳过」守卫吞掉——连读页等 store 视图在重载前看不到修订。
+    const cached = JSON.parse(
+      JSON.stringify(backend.chapters[0]),
+    ) as ReturnType<typeof JSON.parse>;
+    cached.content = "旧正文";
+    backend.chapters[0].content = "旧正文";
+    store.setState({ chapters: { n1: [cached] } });
+
+    const result = await store
+      .getState()
+      .reviseChapterContent("c1", "旧正文", "新正文");
+
+    expect(result).toEqual({ count: 1 });
+    // 平台层已落库。
+    expect(backend.chapters[0].content).toBe("新正文");
+    // 修复点：store 缓存同步被平台层结果覆盖（旧实现停留在「旧正文」）。
+    expect(store.getState().chapters["n1"]?.[0]?.content).toBe("新正文");
   });
 });

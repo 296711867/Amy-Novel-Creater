@@ -196,7 +196,13 @@ export function createGlobalReviewActions(set: NovelStateSet, get: NovelStateGet
       createSnapshot: true,
       origin: "manual",
     });
-    await get().loadChapters(chapter.novelId);
+    // AN-062①：loadChapters 有「已加载即跳过」缓存守卫，落库后的刷新是
+    // 空操作，连读页等 store 视图在重载前看不到修订结果。直接以平台层
+    // 结果覆盖缓存，保证修订立即可见。
+    const chapters = await platform.listChapters(chapter.novelId);
+    set({
+      chapters: { ...get().chapters, [chapter.novelId]: chapters },
+    });
     return { count };
   },
   };

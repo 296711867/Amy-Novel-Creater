@@ -423,6 +423,19 @@ export function createCruiseActions(set: NovelStateSet, get: NovelStateGet) {
           pauseCruise(novelId, "运行对应的批次不存在，请人工检查。");
           return;
         }
+        // AN-062②：批次已终态而运行停在 paused（人工暂停批次后批次自行
+        // 收尾、或运行状态更新丢失）时，下方 dispatchBatch 对终态批次是
+        // 空操作，巡航每轮空转、永不收敛封存（线上形态：文案停在
+        // 「正在检查进度」）。先按 running 分支同款对账把运行状态收敛到
+        // 批次终态，下一轮走 completed/failed 分支正常收尾。
+        if (["completed", "failed", "cancelled"].includes(batch.status)) {
+          const update = workflowRunUpdateFromBatch(batch);
+          if (update) {
+            await platform.updateWorkflowRun({ id: run.id, ...update });
+            await get().loadWorkflowRuns(novelId);
+          }
+          return;
+        }
         if (batch.outputTokensUsed >= batch.policy.outputTokenBudget) {
           pauseCruise(
             novelId,

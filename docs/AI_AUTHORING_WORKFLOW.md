@@ -16,7 +16,7 @@
 | 项目包 | `backups/*.amy-novel.json`（#/data 页可恢复；gitignore） |
 | 当前引擎 | 真实 API：智谱 GLM-5.2（Coding Plan），`open.bigmodel.cn/api/coding/paas/v4`；本地 mock 作者模型（8991）已退役，勿复活 |
 | 新书路径 | 照 §8 手册执行（前置清单 → 建书开跑 → 监控 → 恢复套餐 → 终检导出） |
-| 故障速查 | §8.5 全录 14 条（#1 Key 丢失最高频、#11 IAB 回收自愈、#12 实体类型错位、#13 重派悬空稿） |
+| 故障速查 | §8.5 全录 15 条（#1 Key 丢失最高频、#11 IAB 回收自愈、#12 实体类型错位、#13 重派悬空稿） |
 | 数据位置 | 浏览器 IndexedDB（`amy-novel` 库 kv store，键 `amy-novel:*`）；Web 端 API Key 存 sessionStorage（IAB 重载即丢，§8.5 #1） |
 
 ---
@@ -449,8 +449,8 @@ scripts/author-runner.mjs（新，实验性）
   已接受候选 + 拒 12 份悬空重派稿，零重生成收口；③质量门 error 6 章：33/82/98/100
   章字数重写、34 章英文文本修复、83 章四轮重写（字数+九码设定+结尾钩子）；
   ④实体类型错位 1 次（空 patch 提案 targetType=character vs 实体 location）→ 拒。
-- 新发现两处产品缺陷登记 **AN-062**（修订后 store 缓存不刷新 / paused 运行 +
-  completed 批次 tick 空转死洞），复现与修法候选见 BACKLOG。
+- 新发现两处产品缺陷当日修复（**AN-062**：修订后 store 缓存不刷新 /
+  paused 运行 + completed 批次 tick 空转死洞，双回归测试覆盖，见 BACKLOG）。
 - 导出：`书稿/灯匠与雾海-真实GLM5.2-全120章.md`（278,615 字符）、
   `backups/灯匠与雾海-真实GLM5.2.amy-novel.json`（5.1MB，JSON 校验通过）。
 
@@ -606,6 +606,7 @@ cruise status/message、acceptedCount、心跳、sessionStorage Key 长度）；
 | 12 | 「找不到要更新的设定」但实体同名存在（归航钉、第十三颗之谶） | add 提案按 term 建实体、后续 update 提案按 item+ref 寻址，resolveStoryEntity 要求 type 严格相等 → 双双失配 | `saveStoryEntity({...ent, type:"item"})` 把实体类型对齐提案后接受提案（item 语义通常更准） | 已有绕行；产品化建议：ref 命中时放宽 type 严格相等 |
 | 13 | 重载后巡航把已封存周期整段重派（41–50 章），47 份新候选悬空卡死封存门 | AN-061 自愈只覆盖「指向本轮开始前旧稿」；本轮内重派的新稿仍算待审 | 对已入正史章节上 status==="candidate" 的重派稿逐一 `rejectChapterCandidate`（rejected 是已决断态不算待审）+ `updateGenerationJob(id,"completed",{candidateId:已接受候选})` | 已有绕行；产品化建议：批次派发前按章节正史状态过滤 |
 | 14 | updateFinding 直接调 platform 层后自动接受仍见 error open | 平台层写成功但不刷 store 缓存，tick 读的是 store | findings 一律走 store 动作 `updateFinding(candidateId, findingId, "resolved")`（双层同步） | ✅ 认知修正（操作纪律，非缺陷） |
+| 15 | reviseChapterContent 落库后连读页看不到修订；巡航对「无检查点 paused 运行 + 终态批次」每轮空转永不封存 | 前者 loadChapters 缓存守卫吞掉刷新；后者 paused 分支只 dispatch 不对账 | **AN-062 已修**（2026-09-25）：修订后直接以平台结果覆盖 chapters 缓存；tick 对账分支下沉到 paused 无检查点路径。值守期如再遇同形，重载页面 / 手工 `updateWorkflowRun` 翻 running 仍可作兜底 | ✅ 已修（AN-062，含双回归测试） |
 
 ### 8.6 文件地图（一本书的完整产物）
 

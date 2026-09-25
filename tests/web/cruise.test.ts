@@ -792,6 +792,47 @@ describe("全自动巡航（AN-035）", () => {
     expect((run as { status?: string }).status).toBe("completed");
   });
 
+  it("AN-062②：无检查点 paused 运行 + 批次已终态 → 先对账收敛，不空转 dispatch", async () => {
+    // 线上形态（《灯匠与雾海（真实重制版）》实跑）：人工暂停批次后批次
+    // 自行收尾为 completed，运行停在 paused 且无 checkpoint——旧逻辑每轮
+    // tick 走 dispatchBatch（对终态批次是空操作），永不收敛封存。
+    seedRun({
+      status: "paused",
+      checkpoint: null,
+      batchId: "b-done2",
+    });
+    backend.batches.push({
+      id: "b-done2",
+      novelId: "n1",
+      status: "completed",
+      policy: policy(21, 30),
+      outputTokensUsed: 100,
+      awaitingReview: false,
+      createdAt: backend.now,
+      updatedAt: backend.now,
+    });
+    store.setState({ cruise: { n1: { enabled: true, status: "active", targetChapter: 40, message: "", updatedAt: backend.now } } });
+    await store.getState().tickCruise("n1");
+    // 第一轮：运行状态按批次终态收敛为 completed。
+    const run = backend.runs.find((item) => item.id === "wr-seed");
+    expect((run as { status?: string }).status).toBe("completed");
+    // 对终态批次不做任何拉起（空转死洞的特征就是反复 dispatch）。
+    expect(backend.calls.startBackgroundBatch).toEqual([]);
+    // 第二轮：走 completed 分支照常推进（封存本章周期并开下一周期）。
+    seedChapters(21, 30, "accepted");
+    seedCycle(21, 30, "generating");
+    await store.getState().tickCruise("n1");
+    const sealed = backend.calls.savePlanningCycle[0] as { status: string };
+    expect(sealed.status).toBe("completed");
+    const created = backend.calls.createWorkflowRun[0] as {
+      config: { generationPolicy: { startChapter: number; endChapter: number } };
+    };
+    expect(created.config.generationPolicy).toMatchObject({
+      startChapter: 31,
+      endChapter: 40,
+    });
+  });
+
   it("看门狗：单步耗时过长时保持防重入锁，不启动重复任务", async () => {
     vi.useFakeTimers();
     try {
